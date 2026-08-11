@@ -63,11 +63,10 @@ export class Mapper1Cartridge extends BaseCartridge {
   importState(s){super.importState(s);this.shift=s.shift;this.control=s.control;this.chrBank0=s.chrBank0;this.chrBank1=s.chrBank1;this.prgBank=s.prgBank;this.syncMirroring();}
 }
 
-
 export class Mapper4Cartridge extends BaseCartridge {
   constructor(image,opts={}){
     super(image,4,opts);
-    if(this.prgRom.length<0x8000||this.prgRom.length%0x2000)throw new Error('MMC3 requires PRG ROM in 8KiB banks');
+    if(this.prgRom.length<0x4000||this.prgRom.length%0x2000)throw new Error('MMC3 requires at least 16KiB PRG ROM in 8KiB banks');
     if(this.image.chrRom.length>0&&this.image.chrRom.length%0x0400)throw new Error('MMC3 CHR ROM must be 1KiB aligned');
     this.prgBankCount=this.prgRom.length/0x2000;
     this.chrBankCount=this.chr.length/0x0400;
@@ -99,6 +98,9 @@ export class Mapper4Cartridge extends BaseCartridge {
     this.emit('mmc3-bank-data',{register:this.bankSelect,value:v,prgMode:this.prgMode,chrMode:this.chrMode,prgMap:this.prgMap(),chrMap:this.chrMap()});
   }
   prgMap(){
+    // Some mapper-validation ROMs use a compact 16KiB image on an MMC3 devcart.
+    // With only two physical 8KiB banks, expose the image twice across $8000-$FFFF.
+    if(this.prgBankCount===2)return [0,1,0,1];
     const last=this.prgBankCount-1,last2=Math.max(0,last-1),r6=this.registers[6]%this.prgBankCount,r7=this.registers[7]%this.prgBankCount;
     return this.prgMode?[last2,r7,r6,last]:[r6,r7,last2,last];
   }
