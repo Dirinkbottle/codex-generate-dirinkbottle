@@ -50,5 +50,11 @@ export class NESBus {
     this.trace('w',a,mapped,v,device,source);
     if(this.watchpoints.match(a,'w'))this.breakReason={type:'watchpoint',access:'w',address:a,mappedAddress:mapped,value:v,device,source};
   }
+  peek8(address){
+    const a=address&0xffff;
+    if(a<0x2000)return this.ram[a&0x07ff];
+    if(a<0x4020)return this.openBus&0xff;
+    const v=this.cartridge?.cpuRead(a);return (v==null?this.openBus:v)&0xff;
+  }
   read16(address,source='cpu'){const a=address&0xffff;return this.read8(a,source)|(this.read8((a+1)&0xffff,source)<<8);}
 }

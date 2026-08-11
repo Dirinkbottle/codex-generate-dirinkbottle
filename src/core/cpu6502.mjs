@@ -100,6 +100,44 @@ export class CPU6502 {
     return v;
   }
 
+  lookupOpcode(code) { return OPCODES[code & 0xff]; }
+  peek8(address) { return this.bus.peek8 ? this.bus.peek8(address) : this.bus.read8(address, 'timing-peek'); }
+  estimateNextCycles() {
+    if (this.nmiPending) return 7;
+    const irq = this.externalIrqSampling ? this.irqSampled : (this.irqLine && !this.getFlag(FLAG.I));
+    if (irq) return 7;
+    const op = this.lookupOpcode(this.peek8(this.pc));
+    if (!op) return null;
+    let cycles = op.cycles;
+    const branch = {
+      BCC: !this.getFlag(FLAG.C), BCS: this.getFlag(FLAG.C), BEQ: this.getFlag(FLAG.Z),
+      BMI: this.getFlag(FLAG.N), BNE: !this.getFlag(FLAG.Z), BPL: !this.getFlag(FLAG.N),
+      BVC: !this.getFlag(FLAG.V), BVS: this.getFlag(FLAG.V),
+    }[op.mnemonic];
+    if (branch !== undefined) {
+      if (branch) {
+        cycles++;
+        const off = this.peek8((this.pc + 1) & 0xffff), signed = off < 0x80 ? off : off - 0x100;
+        const next = (this.pc + 2) & 0xffff, target = (next + signed) & 0xffff;
+        if ((next & 0xff00) !== (target & 0xff00)) cycles++;
+      }
+      return cycles;
+    }
+    if (op.pageCross) {
+      let base = null, index = 0;
+      if (op.mode === 'ABX' || op.mode === 'ABY') {
+        base = this.peek8((this.pc + 1) & 0xffff) | (this.peek8((this.pc + 2) & 0xffff) << 8);
+        index = op.mode === 'ABX' ? this.x : this.y;
+      } else if (op.mode === 'IZY') {
+        const zp = this.peek8((this.pc + 1) & 0xffff);
+        base = this.peek8(zp) | (this.peek8((zp + 1) & 0xff) << 8);
+        index = this.y;
+      }
+      if (base != null && (base & 0xff00) !== (((base + index) & 0xffff) & 0xff00)) cycles++;
+    }
+    return cycles;
+  }
+
   fetch8() {
     const v = this.bus.read8(this.pc, 'opcode/data');
     this.pc = (this.pc + 1) & 0xffff;
@@ -315,7 +353,7 @@ export class CPU6502 {
     const before = this.trace ? this.snapshot() : null;
     const opcode = this.bus.read8(this.pc, 'opcode');
     this.pc = (this.pc + 1) & 0xffff;
-    const op = OPCODES[opcode];
+    const op = this.lookupOpcode(opcode);
     if (!op) throw new Error(`Unsupported/illegal opcode $${hex8(opcode)} at $${hex16(startPC)}`);
 
     this._instructionBytes = this.trace ? [opcode] : null;

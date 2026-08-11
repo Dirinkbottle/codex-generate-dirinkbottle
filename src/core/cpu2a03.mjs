@@ -26,6 +26,7 @@ export const UNOFFICIAL_OPCODES=makeUnofficialOpcodeTable();
 export const STABLE_UNOFFICIAL_OPCODE_COUNT=UNOFFICIAL_OPCODES.filter(Boolean).length;
 
 export class CPU2A03 extends CPU6502 {
+  lookupOpcode(code){return OPCODES[code&0xff]??UNOFFICIAL_OPCODES[code&0xff];}
   execute(op,resolved){
     const read=()=>this.readOperand(resolved);
     const write=v=>this.writeOperand(resolved,v&0xff);
@@ -55,7 +56,7 @@ export class CPU2A03 extends CPU6502 {
     const takeIRQ=this.externalIrqSampling?this.irqSampled:(this.irqLine&&!this.getFlag(FLAG.I));
     if(takeIRQ){if(this.externalIrqSampling)this.irqSampled=false;this.lastStepWasInterrupt=true;return this.serviceInterrupt(0xfffe,'IRQ');}
     const startPC=this.pc,before=this.trace?this.snapshot():null,opcode=this.bus.read8(this.pc,'opcode');this.pc=(this.pc+1)&0xffff;
-    const op=OPCODES[opcode]??UNOFFICIAL_OPCODES[opcode];
+    const op=this.lookupOpcode(opcode);
     if(!op)throw new Error(`Unsupported/unstable opcode $${hex8(opcode)} at $${hex16(startPC)}`);
     this._instructionBytes=this.trace?[opcode]:null;const resolved=this.resolve(op.mode);let spent=op.cycles;spent+=this.execute(op,resolved)||0;if(op.pageCross&&resolved.pageCrossed)spent++;
     const bytes=this._instructionBytes?Object.freeze(this._instructionBytes.slice()):null;this.cycles+=spent;
