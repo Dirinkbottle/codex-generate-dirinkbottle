@@ -50,6 +50,7 @@ export class PPU2C02 {
         if(a<0x3f00){value=this.readBuffer;this.readBuffer=this.bus.read8(a,'cpu-ppudata-fill');}
         else {value=this.bus.read8(a,'cpu-ppudata-palette');this.readBuffer=this.bus.read8((a-0x1000)&0x3fff,'cpu-ppudata-buffer');}
         this.v=(this.v+((this.ctrl&4)?32:1))&0x7fff;
+        this.bus.observe?.(this.v&0x3fff,'cpu-ppudata-increment');
         break;
       }
       default: value=this.openBus;
@@ -71,7 +72,7 @@ export class PPU2C02 {
         if(!this.w){this.t=(this.t&0x00ff)|((d&0x3f)<<8);this.w=true;}
         else{this.t=(this.t&0x7f00)|d;this.v=this.t;this.w=false;this.bus.observe?.(this.v&0x3fff,'cpu-ppuaddr');}
         break;
-      case 7:this.bus.write8(this.v&0x3fff,d,'cpu-ppudata');this.v=(this.v+((this.ctrl&4)?32:1))&0x7fff;break;
+      case 7:this.bus.write8(this.v&0x3fff,d,'cpu-ppudata');this.v=(this.v+((this.ctrl&4)?32:1))&0x7fff;this.bus.observe?.(this.v&0x3fff,'cpu-ppudata-increment');break;
     }
     this.regTrace('w',reg,d);
   }
@@ -152,7 +153,7 @@ export class PPU2C02 {
       if((this.dot>=2&&this.dot<=257)||(this.dot>=322&&this.dot<=337))this.shiftBackground();
       if((this.dot>=1&&this.dot<=256)||(this.dot>=321&&this.dot<=336))this.backgroundFetch();
       if(this.dot===256)this.incrementY();
-      if(this.dot===257){this.loadBackgroundShifters();this.copyX();const next=this.scanline===261?0:this.scanline+1;if(next<240)this.evaluateSprites(next);}
+      if(this.dot===257){this.loadBackgroundShifters();this.copyX();const next=this.scanline===261?0:this.scanline+1;this.evaluateSprites(next);}
       if(this.scanline===261&&this.dot>=280&&this.dot<=304)this.copyY();
       if(this.dot===338||this.dot===340)this.bgNextTileId=this.bus.read8(0x2000|(this.v&0x0fff),'bg-nt-prefetch');
     }
