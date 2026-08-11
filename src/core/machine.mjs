@@ -15,20 +15,24 @@ export class NESMachine {
     this.traceHub=new TraceHub({capacities:traceCapacities});
     this.trace=this.traceHub.channel('cpu');
     this.watchpoints=new WatchpointSet();
+    this.irqSources={apu:false,mapper:false};
     this.loaded=false;
   }
+  updateCpuIRQ(){const line=Object.values(this.irqSources).some(Boolean);this.cpu?.setIRQ(line);return line;}
+  setIRQSource(source,line){const next=!!line;if(this.irqSources[source]===next)return;this.irqSources[source]=next;const combined=this.updateCpuIRQ();this.traceHub?.emit('timeline',{type:'irq-source',source,level:next,combined});}
+  syncIRQSources(){this.irqSources.apu=!!(this.apu?.frameIRQ||this.apu?.dmc?.irq);this.irqSources.mapper=!!this.cartridge?.irqAsserted;this.updateCpuIRQ();}
   loadROM(input){
-    this.cpu=null;this.scheduler=null;this.traceHub.setClock(()=>this.scheduler?.cpuCycle??0);
-    this.parsed=parseINES(input);this.cartridge=createCartridge(this.parsed,{traceHub:this.traceHub});
+    this.cpu=null;this.scheduler=null;this.irqSources={apu:false,mapper:false};this.traceHub.setClock(()=>this.scheduler?.cpuCycle??0);
+    this.parsed=parseINES(input);this.cartridge=createCartridge(this.parsed,{traceHub:this.traceHub,onIRQChange:line=>this.setIRQSource('mapper',line)});
     this.ppuBus=new PPUMemoryBus({cartridge:this.cartridge,traceHub:this.traceHub});
     this.ppu=new PPU2C02({bus:this.ppuBus,traceHub:this.traceHub,onNMI:()=>this.cpu?.requestNMI()});
     this.controllers=new ControllerPorts({traceHub:this.traceHub,cycle:()=>this.scheduler?.cpuCycle??0});
     this.inputTimeline=new InputTimeline({traceHub:this.traceHub});
-    this.apu=new APU2A03({traceHub:this.traceHub,cycle:()=>this.scheduler?.cpuCycle??0,onIRQChange:line=>this.cpu?.setIRQ(line)});
+    this.apu=new APU2A03({traceHub:this.traceHub,cycle:()=>this.scheduler?.cpuCycle??0,onIRQChange:line=>this.setIRQSource('apu',line)});
     this.bus=new NESBus({cartridge:this.cartridge,ppu:this.ppu,apu:this.apu,controllers:this.controllers,watchpoints:this.watchpoints,traceHub:this.traceHub});
     this.traceHub.clear();
     this.cpu=new CPU2A03(this.bus,{trace:this.trace});
-    this.cpu.reset();
+    this.cpu.reset();this.syncIRQSources();
     this.scheduler=new MasterClock({cpu:this.cpu,ppu:this.ppu,apu:this.apu,bus:this.bus,controllers:this.controllers,inputTimeline:this.inputTimeline,traceHub:this.traceHub,startCpuCycle:0});
     this.traceHub.setClock(()=>this.scheduler?.cpuCycle??0);
     this.scheduler.advanceCycles(this.cpu.cycles,'reset');
@@ -36,7 +40,7 @@ export class NESMachine {
   }
   ensureLoaded(){if(!this.loaded)throw new Error('No ROM loaded');}
   reset(){
-    this.ensureLoaded();this.traceHub.clear();this.bus.clearBreak();this.bus.oamDmaPage=null;this.ppu.reset();this.apu.reset();this.cpu.reset();
+    this.ensureLoaded();this.traceHub.clear();this.bus.clearBreak();this.bus.oamDmaPage=null;this.irqSources={apu:false,mapper:false};this.cartridge.reset?.();this.ppu.reset();this.apu.reset();this.cpu.reset();this.syncIRQSources();
     this.scheduler=new MasterClock({cpu:this.cpu,ppu:this.ppu,apu:this.apu,bus:this.bus,controllers:this.controllers,inputTimeline:this.inputTimeline,traceHub:this.traceHub,startCpuCycle:0});
     this.traceHub.setClock(()=>this.scheduler.cpuCycle);this.scheduler.advanceCycles(this.cpu.cycles,'reset');return this.snapshot();
   }
@@ -76,11 +80,11 @@ export class NESMachine {
     restoreMutable(this.apu,state.apu,{skip:['traceHub','cycleProvider','onIRQChange','onIrq']});
     restoreMutable(this.controllers,state.controllers,{skip:['traceHub','cycle']});
     restoreMutable(this.inputTimeline,state.inputTimeline,{skip:['traceHub']});
-    this.scheduler.cpuCycle=state.clock.cpuCycle|0;this.scheduler.totalStallCycles=state.clock.totalStallCycles|0;
+    this.scheduler.cpuCycle=state.clock.cpuCycle|0;this.scheduler.totalStallCycles=state.clock.totalStallCycles|0;this.syncIRQSources();
     this.traceHub.clear();this.traceHub.emit('timeline',{type:'state-load',cpuCycle:this.scheduler.cpuCycle,romId:this.cartridge.romId});
     return this.snapshot();
   }
   snapshot(){
-    this.ensureLoaded();return {romId:this.cartridge.romId,mapper:this.cartridge.mapper,mirroring:this.cartridge.mirroring,hasBattery:this.cartridge.hasBattery,chrIsRam:this.cartridge.chrIsRam,cpu:this.cpu.snapshot(),ppu:this.ppu.snapshot(),apu:this.apu.snapshot(),controllers:this.controllers.snapshot(),clock:this.scheduler.snapshot(),breakReason:this.bus.breakReason};
+    this.ensureLoaded();return {romId:this.cartridge.romId,mapper:this.cartridge.mapper,mirroring:this.cartridge.mirroring,hasBattery:this.cartridge.hasBattery,chrIsRam:this.cartridge.chrIsRam,cpu:this.cpu.snapshot(),ppu:this.ppu.snapshot(),apu:this.apu.snapshot(),controllers:this.controllers.snapshot(),clock:this.scheduler.snapshot(),irqSources:{...this.irqSources},mapperState:this.cartridge.debugState?.()??null,breakReason:this.bus.breakReason};
   }
 }

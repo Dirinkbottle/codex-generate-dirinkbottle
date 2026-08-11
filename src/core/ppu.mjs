@@ -1,5 +1,6 @@
 import { PPUMemoryBus } from './ppubus.mjs';
 
+// A deterministic 64-entry RGB palette for debug/display. Composite artifact colors vary by hardware/display.
 export const NES_RGB = Object.freeze([
   0x626262,0x001fb2,0x2404c8,0x5200b2,0x730076,0x800024,0x730b00,0x522800,0x244400,0x005700,0x005c00,0x005324,0x003c76,0x000000,0x000000,0x000000,
   0xababab,0x0d57ff,0x4b30ff,0x8a13ff,0xbc08d6,0xd21269,0xc72e00,0x9d5400,0x607b00,0x209800,0x00a300,0x009942,0x007db4,0x000000,0x000000,0x000000,
@@ -12,6 +13,7 @@ export class PPU2C02 {
     this.traceHub = traceHub;
     this.bus = bus ?? new PPUMemoryBus({ cartridge, traceHub });
     this.onNMI = onNMI;
+    this.bus.setCycleProvider?.(()=>this.ppuCycle);
     this.framebuffer = new Uint8ClampedArray(256*240*4);
     this.oam = new Uint8Array(256);
     this.reset();
@@ -19,7 +21,7 @@ export class PPU2C02 {
   reset() {
     this.ctrl=0; this.mask=0; this.status=0; this.oamAddr=0; this.openBus=0;
     this.v=0; this.t=0; this.fineX=0; this.w=false; this.readBuffer=0;
-    this.scanline=261; this.dot=0; this.frame=0; this.oddFrame=false; this.nmiLine=false;
+    this.scanline=261; this.dot=0; this.frame=0; this.oddFrame=false; this.nmiLine=false; this.ppuCycle=0;
     this.bgNextTileId=0; this.bgNextTileAttr=0; this.bgNextTileLo=0; this.bgNextTileHi=0;
     this.bgPatternLo=0; this.bgPatternHi=0; this.bgAttrLo=0; this.bgAttrHi=0;
     this.scanlineSprites=[];
@@ -67,7 +69,7 @@ export class PPU2C02 {
         break;
       case 6:
         if(!this.w){this.t=(this.t&0x00ff)|((d&0x3f)<<8);this.w=true;}
-        else{this.t=(this.t&0x7f00)|d;this.v=this.t;this.w=false;}
+        else{this.t=(this.t&0x7f00)|d;this.v=this.t;this.w=false;this.bus.observe?.(this.v&0x3fff,'cpu-ppuaddr');}
         break;
       case 7:this.bus.write8(this.v&0x3fff,d,'cpu-ppudata');this.v=(this.v+((this.ctrl&4)?32:1))&0x7fff;break;
     }
@@ -108,6 +110,8 @@ export class PPU2C02 {
       const lo=this.bus.read8(addr,'sprite-pattern-lo'),hi=this.bus.read8(addr+8,'sprite-pattern-hi');
       this.scanlineSprites.push({index:i,x,attr,lo,hi});
     }
+    const dummyBase=(this.ctrl&0x08)?0x1000:0;
+    for(let i=this.scanlineSprites.length;i<8;i++){this.bus.read8(dummyBase,'sprite-pattern-dummy-lo');this.bus.read8(dummyBase+8,'sprite-pattern-dummy-hi');}
     if(found>8)this.status|=0x20;
     this.traceHub?.emit('ppuEvent',{type:'sprite-eval',frame:this.frame,scanline,dot:this.dot,found,selected:this.scanlineSprites.length});
   }
@@ -137,22 +141,23 @@ export class PPU2C02 {
     this.framebuffer[i]=(rgb>>16)&0xff;this.framebuffer[i+1]=(rgb>>8)&0xff;this.framebuffer[i+2]=rgb&0xff;this.framebuffer[i+3]=255;
   }
   tick(){
+    // Significant timing events happen at the beginning of the dot.
     if(this.scanline===241&&this.dot===1){this.status|=0x80;this.emitEvent('vblank-start');this.updateNMILine('vblank-start');}
     if(this.scanline===261&&this.dot===1){this.status&=~0xe0;this.emitEvent('pre-render-clear');this.updateNMILine('pre-render-clear');}
 
     const renderLine=this.scanline<240||this.scanline===261;
-    if(this.scanline<240&&this.dot===0)this.evaluateSprites(this.scanline);
     if(this.scanline<240&&this.dot>=1&&this.dot<=256)this.drawPixel(this.dot-1,this.scanline);
 
     if(this.renderingEnabled()&&renderLine){
       if((this.dot>=2&&this.dot<=257)||(this.dot>=322&&this.dot<=337))this.shiftBackground();
       if((this.dot>=1&&this.dot<=256)||(this.dot>=321&&this.dot<=336))this.backgroundFetch();
       if(this.dot===256)this.incrementY();
-      if(this.dot===257){this.loadBackgroundShifters();this.copyX();}
+      if(this.dot===257){this.loadBackgroundShifters();this.copyX();const next=this.scanline===261?0:this.scanline+1;if(next<240)this.evaluateSprites(next);}
       if(this.scanline===261&&this.dot>=280&&this.dot<=304)this.copyY();
       if(this.dot===338||this.dot===340)this.bgNextTileId=this.bus.read8(0x2000|(this.v&0x0fff),'bg-nt-prefetch');
     }
-    this.advanceCounters();
+
+    this.ppuCycle++;this.advanceCounters();
   }
   advanceCounters(){
     if(this.scanline===261&&this.dot===339&&this.oddFrame&&this.renderingEnabled()){

@@ -23,3 +23,20 @@ jobs:
           test "$(wc -c < /tmp/6502_functional_test.bin)" -eq 65536
       - name: Run independent Klaus functional oracle
         run: node tests/klaus.mjs /tmp/6502_functional_test.bin
+      - name: Download pinned blargg MMC3 IRQ oracles
+        run: |
+          base=https://raw.githubusercontent.com/christopherpow/nes-test-roms/95d8f621ae55cee0d09b91519a8989ae0e64753b/mmc3_irq_tests
+          curl -fL --retry 3 "$base/1.Clocking.nes" -o /tmp/mmc3-1.nes
+          curl -fL --retry 3 "$base/2.Details.nes" -o /tmp/mmc3-2.nes
+          curl -fL --retry 3 "$base/3.A12_clocking.nes" -o /tmp/mmc3-3.nes
+          curl -fL --retry 3 "$base/4.Scanline_timing.nes" -o /tmp/mmc3-4.nes
+          test "$(git hash-object /tmp/mmc3-1.nes)" = 47ed2dd874b4d4a65af66c70af1f95ea6617fe50
+          test "$(git hash-object /tmp/mmc3-2.nes)" = 842e26f830eae597eff5409f7c8afe6086347540
+          test "$(git hash-object /tmp/mmc3-3.nes)" = 00094deaa5abdb2398a8952a1ae387f27fab2218
+          test "$(git hash-object /tmp/mmc3-4.nes)" = 202d04f935bc609e196cfeb4f2f26469c12b2b12
+      - name: Run independent blargg MMC3 IRQ oracles
+        run: |
+          node tests/blargg_mmc3.mjs /tmp/mmc3-1.nes
+          node tests/blargg_mmc3.mjs /tmp/mmc3-2.nes
+          node tests/blargg_mmc3.mjs /tmp/mmc3-3.nes
+          node tests/blargg_mmc3.mjs /tmp/mmc3-4.nes

@@ -4,10 +4,10 @@ function hashBytes(bytes, seed=0x811c9dc5){let h=seed>>>0;for(const b of bytes){
 function romIdentity(c){const h=hashBytes(c.raw??c.prgRom);return `${c.mapper}-${c.prgRom.length}-${c.chrRom.length}-${h.toString(16).padStart(8,'0')}`;}
 
 class BaseCartridge {
-  constructor(image, mapper, {traceHub=null}={}) {
+  constructor(image, mapper, {traceHub=null,onIRQChange=null}={}) {
     const c=image?.format==='iNES'?image:parseINES(image);
     if(c.mapper!==mapper)throw new Error(`Mapper ${c.mapper} is not supported by mapper ${mapper} cartridge`);
-    this.image=c;this.mapper=mapper;this.traceHub=traceHub;this.mirroring=c.mirroring;this.hasBattery=c.hasBattery;this.romId=romIdentity(c);
+    this.image=c;this.mapper=mapper;this.traceHub=traceHub;this.onIRQChange=onIRQChange;this.mirroring=c.mirroring;this.hasBattery=c.hasBattery;this.romId=romIdentity(c);
     this.prgRom=c.prgRom.slice();
     this.prgRam=new Uint8Array(Math.max(1,c.prgRamBanks??1)*0x2000);
     this.chrIsRam=c.chrRom.length===0;
@@ -63,4 +63,98 @@ export class Mapper1Cartridge extends BaseCartridge {
   importState(s){super.importState(s);this.shift=s.shift;this.control=s.control;this.chrBank0=s.chrBank0;this.chrBank1=s.chrBank1;this.prgBank=s.prgBank;this.syncMirroring();}
 }
 
-export function createCartridge(input,opts={}){const parsed=input?.format==='iNES'?input:parseINES(input);switch(parsed.mapper){case 0:return new Mapper0Cartridge(parsed,opts);case 1:return new Mapper1Cartridge(parsed,opts);case 2:return new Mapper2Cartridge(parsed,opts);case 3:return new Mapper3Cartridge(parsed,opts);default:throw new Error(`Unsupported mapper ${parsed.mapper}; supported: 0 NROM, 1 MMC1, 2 UxROM, 3 CNROM`);}}
+
+export class Mapper4Cartridge extends BaseCartridge {
+  constructor(image,opts={}){
+    super(image,4,opts);
+    if(this.prgRom.length<0x8000||this.prgRom.length%0x2000)throw new Error('MMC3 requires PRG ROM in 8KiB banks');
+    if(this.image.chrRom.length>0&&this.image.chrRom.length%0x0400)throw new Error('MMC3 CHR ROM must be 1KiB aligned');
+    this.prgBankCount=this.prgRom.length/0x2000;
+    this.chrBankCount=this.chr.length/0x0400;
+    this.fourScreen=this.image.mirroring==='four-screen';
+    this.a12MinLowCycles=8;
+    this.reset();
+  }
+  reset(){
+    this.registers=new Uint8Array(8);this.bankSelect=0;this.prgMode=0;this.chrMode=0;
+    this.prgRamEnabled=true;this.prgRamWriteProtected=false;
+    this.irqLatch=0;this.irqCounter=0;this.irqReload=false;this.irqEnabled=false;this.irqAsserted=false;
+    this.a12High=false;this.a12LowSince=null;this.a12QualifiedEdges=0;this.a12RejectedEdges=0;
+    if(!this.fourScreen)this.mirroring=this.image.mirroring;
+    this.onIRQChange?.(false);
+  }
+  emit(type,extra={}){this.traceHub?.emit('mapper',{type,mapper:4,...extra});}
+  emitA12(type,extra={}){this.traceHub?.emit('mapperA12',{type,mapper:4,...extra});}
+  setIrq(level,reason='state'){
+    const next=!!level;if(next===this.irqAsserted)return;
+    this.irqAsserted=next;this.emit(next?'irq-assert':'irq-clear',{reason,counter:this.irqCounter,latch:this.irqLatch});this.onIRQChange?.(next);
+  }
+  selectRegister(value){
+    const oldPrg=this.prgMode,oldChr=this.chrMode;
+    this.bankSelect=value&7;this.prgMode=(value>>6)&1;this.chrMode=(value>>7)&1;
+    this.emit('mmc3-bank-select',{value:value&0xff,register:this.bankSelect,prgMode:this.prgMode,chrMode:this.chrMode,modeChanged:oldPrg!==this.prgMode||oldChr!==this.chrMode});
+  }
+  writeBankData(value){
+    let v=value&0xff;if(this.bankSelect<=1)v&=0xfe;this.registers[this.bankSelect]=v;
+    this.emit('mmc3-bank-data',{register:this.bankSelect,value:v,prgMode:this.prgMode,chrMode:this.chrMode,prgMap:this.prgMap(),chrMap:this.chrMap()});
+  }
+  prgMap(){
+    const last=this.prgBankCount-1,last2=Math.max(0,last-1),r6=this.registers[6]%this.prgBankCount,r7=this.registers[7]%this.prgBankCount;
+    return this.prgMode?[last2,r7,r6,last]:[r6,r7,last2,last];
+  }
+  chrMap(){
+    const n=this.chrBankCount,mod=x=>((x%n)+n)%n,r=this.registers;
+    const r0=mod(r[0]&0xfe),r1=mod(r[1]&0xfe);
+    return this.chrMode?[mod(r[2]),mod(r[3]),mod(r[4]),mod(r[5]),r0,mod(r0+1),r1,mod(r1+1)]:[r0,mod(r0+1),r1,mod(r1+1),mod(r[2]),mod(r[3]),mod(r[4]),mod(r[5])];
+  }
+  cpuRead(address){
+    const a=address&0xffff;
+    if(a>=0x6000&&a<=0x7fff)return this.prgRamEnabled?this.prgRam[(a-0x6000)%this.prgRam.length]:0;
+    if(a<0x8000)return null;
+    const slot=(a-0x8000)>>13,bank=this.prgMap()[slot];return this.prgRom[bank*0x2000+(a&0x1fff)];
+  }
+  cpuWrite(address,value){
+    const a=address&0xffff,v=value&0xff;
+    if(a>=0x6000&&a<=0x7fff){if(this.prgRamEnabled&&!this.prgRamWriteProtected)this.prgRam[(a-0x6000)%this.prgRam.length]=v;return true;}
+    if(a<0x8000)return false;
+    switch(a&0xe001){
+      case 0x8000:this.selectRegister(v);break;
+      case 0x8001:this.writeBankData(v);break;
+      case 0xa000:if(!this.fourScreen){this.mirroring=(v&1)?'horizontal':'vertical';this.emit('mmc3-mirroring',{value:v,mirroring:this.mirroring});}else this.emit('mmc3-mirroring-ignored',{value:v,mirroring:'four-screen'});break;
+      case 0xa001:this.prgRamEnabled=!!(v&0x80);this.prgRamWriteProtected=!!(v&0x40);this.emit('mmc3-prg-ram',{value:v,enabled:this.prgRamEnabled,writeProtected:this.prgRamWriteProtected});break;
+      case 0xc000:this.irqLatch=v;this.emit('mmc3-irq-latch',{value:v});break;
+      case 0xc001:this.irqCounter=0;this.irqReload=true;this.emit('mmc3-irq-reload-request',{value:v});break;
+      case 0xe000:this.irqEnabled=false;this.setIrq(false,'e000-disable');this.emit('mmc3-irq-disable');break;
+      case 0xe001:this.irqEnabled=true;this.emit('mmc3-irq-enable');break;
+    }
+    return true;
+  }
+  ppuRead(address){const a=address&0x3fff;if(a>=0x2000)return null;const slot=a>>10,bank=this.chrMap()[slot];return this.chr[bank*0x0400+(a&0x03ff)];}
+  ppuWrite(address,value){const a=address&0x3fff;if(a>=0x2000)return false;if(this.chrIsRam){const slot=a>>10,bank=this.chrMap()[slot];this.chr[bank*0x0400+(a&0x03ff)]=value&0xff;}return true;}
+  clockIrq(ppuCycle,source,address,lowCycles){
+    const before=this.irqCounter,reload=this.irqReload;
+    if(this.irqCounter===0||this.irqReload)this.irqCounter=this.irqLatch;else this.irqCounter=(this.irqCounter-1)&0xff;
+    this.irqReload=false;this.a12QualifiedEdges++;
+    this.emit('mmc3-irq-clock',{ppuCycle,source,address:address&0x3fff,lowCycles,before,after:this.irqCounter,latch:this.irqLatch,reload,enabled:this.irqEnabled});
+    if(this.irqCounter===0&&this.irqEnabled)this.setIrq(true,'a12-counter-zero');
+  }
+  observePpuAddress(address,ppuCycle=0,source='ppu'){
+    const a=address&0x3fff;if(a>=0x3f00)return;
+    const high=!!(a&0x1000),cycle=Number(ppuCycle)||0;
+    if(!high){
+      if(this.a12High||this.a12LowSince==null){this.a12LowSince=cycle;this.emitA12('a12-fall',{ppuCycle:cycle,address:a,source});}
+      this.a12High=false;return;
+    }
+    if(!this.a12High){
+      const lowCycles=this.a12LowSince==null?0:Math.max(0,cycle-this.a12LowSince);
+      if(this.a12LowSince!=null&&lowCycles>=this.a12MinLowCycles){this.emitA12('a12-rise-qualified',{ppuCycle:cycle,address:a,source,lowCycles});this.clockIrq(cycle,source,a,lowCycles);}
+      else{this.a12RejectedEdges++;this.emitA12('a12-rise-rejected',{ppuCycle:cycle,address:a,source,lowCycles});}
+    }
+    this.a12High=true;this.a12LowSince=null;
+  }
+  debugState(){return {mapper:4,bankSelect:this.bankSelect,prgMode:this.prgMode,chrMode:this.chrMode,registers:Array.from(this.registers),prgMap:this.prgMap(),chrMap:this.chrMap(),prgRamEnabled:this.prgRamEnabled,prgRamWriteProtected:this.prgRamWriteProtected,irqLatch:this.irqLatch,irqCounter:this.irqCounter,irqReload:this.irqReload,irqEnabled:this.irqEnabled,irqAsserted:this.irqAsserted,a12QualifiedEdges:this.a12QualifiedEdges,a12RejectedEdges:this.a12RejectedEdges};}
+  exportState(){return {...super.exportState(),registers:Array.from(this.registers),bankSelect:this.bankSelect,prgMode:this.prgMode,chrMode:this.chrMode,prgRamEnabled:this.prgRamEnabled,prgRamWriteProtected:this.prgRamWriteProtected,irqLatch:this.irqLatch,irqCounter:this.irqCounter,irqReload:this.irqReload,irqEnabled:this.irqEnabled,irqAsserted:this.irqAsserted,a12High:this.a12High,a12LowSince:this.a12LowSince,a12QualifiedEdges:this.a12QualifiedEdges,a12RejectedEdges:this.a12RejectedEdges};}
+  importState(s){super.importState(s);this.registers.set(s.registers);this.bankSelect=s.bankSelect;this.prgMode=s.prgMode;this.chrMode=s.chrMode;this.prgRamEnabled=!!s.prgRamEnabled;this.prgRamWriteProtected=!!s.prgRamWriteProtected;this.irqLatch=s.irqLatch&0xff;this.irqCounter=s.irqCounter&0xff;this.irqReload=!!s.irqReload;this.irqEnabled=!!s.irqEnabled;this.irqAsserted=!!s.irqAsserted;this.a12High=!!s.a12High;this.a12LowSince=s.a12LowSince??null;this.a12QualifiedEdges=s.a12QualifiedEdges|0;this.a12RejectedEdges=s.a12RejectedEdges|0;this.onIRQChange?.(this.irqAsserted);}
+}
+
+export function createCartridge(input,opts={}){const parsed=input?.format==='iNES'?input:parseINES(input);switch(parsed.mapper){case 0:return new Mapper0Cartridge(parsed,opts);case 1:return new Mapper1Cartridge(parsed,opts);case 2:return new Mapper2Cartridge(parsed,opts);case 3:return new Mapper3Cartridge(parsed,opts);case 4:return new Mapper4Cartridge(parsed,opts);default:throw new Error(`Unsupported mapper ${parsed.mapper}; supported: 0 NROM, 1 MMC1, 2 UxROM, 3 CNROM, 4 MMC3`);}}
