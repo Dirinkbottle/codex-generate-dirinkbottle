@@ -2,21 +2,8 @@ import { strict as assert } from 'node:assert';
 import { createCartridge } from '../src/core/cartridge.mjs';
 import { NESBus, PPURegisterStub, APUIOStub } from '../src/core/nesbus.mjs';
 import { NESMachine } from '../src/core/machine.mjs';
-
-let passed = 0;
-const test = (name, fn) => { fn(); console.log(`PASS ${name}`); passed++; };
-function rom({prgBanks=1,chrBanks=1,flags6=0,flags7=0,trainer=false,fillPrg=0,fillChr=0}={}) {
-  if (trainer) flags6 |= 0x04;
-  const trainerBytes = trainer ? 512 : 0;
-  const bytes = new Uint8Array(16 + trainerBytes + prgBanks*0x4000 + chrBanks*0x2000);
-  bytes.set([0x4e,0x45,0x53,0x1a,prgBanks,chrBanks,flags6,flags7]);
-  if (trainer) for (let i=0;i<512;i++) bytes[16+i]=i&0xff;
-  const prg = 16 + trainerBytes;
-  bytes.fill(fillPrg, prg, prg + prgBanks*0x4000);
-  bytes.fill(fillChr, prg + prgBanks*0x4000);
-  return bytes;
-}
-
+let passed=0;const test=(name,fn)=>{fn();console.log(`PASS ${name}`);passed++;};
+function rom({prgBanks=1,chrBanks=1,flags6=0,flags7=0,trainer=false,fillPrg=0,fillChr=0}={}){if(trainer)flags6|=4;const t=trainer?512:0,b=new Uint8Array(16+t+prgBanks*0x4000+chrBanks*0x2000);b.set([0x4e,0x45,0x53,0x1a,prgBanks,chrBanks,flags6,flags7]);if(trainer)for(let i=0;i<512;i++)b[16+i]=i&255;const p=16+t;b.fill(fillPrg,p,p+prgBanks*0x4000);b.fill(fillChr,p+prgBanks*0x4000);return b;}
 test('2KiB CPU RAM mirrors through $1FFF',()=>{const b=new NESBus();b.write8(0x0173,0x5a);for(const a of [0x0173,0x0973,0x1173,0x1973])assert.equal(b.read8(a),0x5a)});
 test('PPU registers mirror every 8 bytes',()=>{const p=new PPURegisterStub(),b=new NESBus({ppu:p});b.write8(0x2006,0xab);assert.equal(b.read8(0x3456),0xab);assert.equal(p.accessLog.at(-1).address,0x2006)});
 test('APU/IO window routes to a replaceable stub',()=>{const a=new APUIOStub(),b=new NESBus({apuIo:a});b.write8(0x4016,0x33);assert.equal(b.read8(0x4016),0x33);assert.equal(a.accessLog.length,2)});
@@ -27,8 +14,7 @@ test('iNES trainer is preloaded at CPU $7000',()=>{const c=createCartridge(rom({
 test('CHR ROM is read-only',()=>{const c=createCartridge(rom({chrBanks:1,fillChr:0x44}));assert.equal(c.ppuRead(0),0x44);c.ppuWrite(0,0x99);assert.equal(c.ppuRead(0),0x44)});
 test('CHR size 0 becomes writable 8KiB CHR RAM',()=>{const c=createCartridge(rom({chrBanks:0}));assert.equal(c.chrIsRam,true);c.ppuWrite(0x1fff,0x99);assert.equal(c.ppuRead(0x1fff),0x99)});
 test('Reset vector is fetched through cartridge mapping',()=>{const r=rom({prgBanks:1}),prg=16;r[prg+0x3ffc]=0x34;r[prg+0x3ffd]=0x92;const b=new NESBus({cartridge:createCartridge(r)});assert.equal(b.read16(0xfffc),0x9234)});
-test('Unsupported mapper is rejected at cartridge boundary',()=>{assert.throws(()=>createCartridge(rom({flags6:0x10})),/Unsupported mapper 1/)});
+test('Unknown mapper is rejected at cartridge boundary',()=>{assert.throws(()=>createCartridge(rom({flags6:0xf0})),/Unsupported mapper 15/)});
 test('Watchpoints survive the real NES bus routing layer',()=>{const b=new NESBus();b.watchpoints.add(0x0802,'w','ram mirror');b.write8(0x0802,0xaa);assert.equal(b.breakReason.address,0x0802);assert.equal(b.ram[2],0xaa)});
-test('Synthetic NROM boots real CPU and writes NES RAM',()=>{const r=rom({prgBanks:1,chrBanks:0}),prg=16;r.set([0xa9,0x42,0x8d,0x02,0x00,0xea],prg);r[prg+0x3ffc]=0x00;r[prg+0x3ffd]=0x80;const m=new NESMachine();const s=m.loadROM(r);assert.equal(s.cpu.pc,0x8000);const run=m.step(2);assert.equal(run.executed,2);assert.equal(m.bus.read8(2),0x42);assert.equal(m.cpu.pc,0x8005);assert.equal(m.trace.tail(1)[0].mnemonic,'STA')});
-
+test('Synthetic NROM boots real CPU and writes NES RAM',()=>{const r=rom({prgBanks:1,chrBanks:0}),prg=16;r.set([0xa9,0x42,0x8d,0x02,0x00,0xea],prg);r[prg+0x3ffc]=0;r[prg+0x3ffd]=0x80;const m=new NESMachine();const s=m.loadROM(r);assert.equal(s.cpu.pc,0x8000);const run=m.step(2);assert.equal(run.executed,2);assert.equal(m.bus.read8(2),0x42);assert.equal(m.cpu.pc,0x8005);assert.equal(m.trace.tail(1)[0].mnemonic,'STA')});
 console.log(`\n${passed}/13 P2 tests passed`);

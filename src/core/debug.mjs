@@ -4,7 +4,7 @@ export class TraceRing {
   clear(){this.records.length=0;} snapshot(){return this.records.slice();} tail(n=32){return this.records.slice(-Math.max(0,n));}
 }
 export class TraceHub {
-  constructor({capacities={},enabled=null}={}){this.capacities={cpu:8192,cpuMem:8192,ppuReg:4096,ppuMem:16384,ppuEvent:4096,timeline:8192,dma:8192,controller:4096,apuReg:4096,apuEvent:8192,audioSample:8192,...capacities};this.channels=new Map();this.enabled=new Set(enabled??Object.keys(this.capacities));this.sequence=0;this.clock=()=>null;}
+  constructor({capacities={},enabled=null}={}){this.capacities={cpu:8192,cpuMem:8192,ppuReg:4096,ppuMem:16384,ppuEvent:4096,timeline:8192,dma:8192,controller:4096,apuReg:4096,apuEvent:8192,audioSample:8192,mapper:4096,...capacities};this.channels=new Map();this.enabled=new Set(enabled??Object.keys(this.capacities));this.sequence=0;this.clock=()=>null;}
   setClock(provider){this.clock=typeof provider==='function'?provider:()=>null;}
   channel(n){if(!this.channels.has(n))this.channels.set(n,new TraceRing(this.capacities[n]??2048));return this.channels.get(n)}
   emit(n,r){if(!this.enabled.has(n))return null;const now=this.clock?.();const stamp={seq:this.sequence++,channel:n};if(now!=null&&r.cpuCycle==null)stamp.cpuCycle=now;return this.channel(n).push({...stamp,...r});}
