@@ -1,35 +1,44 @@
 # NES Lab
 
-Browser-first NES emulator project, built around deterministic tests and observable state before PPU/APU complexity.
+Browser-first NES emulator built around deterministic tests and observable state before adding rendering/audio complexity.
 
 ## Roadmap
 
-- **P0 — foundation ✅**: ROM loader, iNES parser, trace/watchpoint infrastructure, flat test bus, executable CPU slice and CI.
-- **P1 — 2A03/6502 CPU ✅**: all 151 official NMOS 6502 opcodes, addressing modes, status/stack/control flow, IRQ/NMI/BRK/RTI, instruction cycle counts and page-cross penalties.
-- **P2 — NES CPU bus + cartridge/Mapper 0**: RAM mirrors, PPU register window, APU/IO stubs, PRG mapping and reset from real NROM.
-- **P3 — PPU**: pattern/nametable/palette/OAM, background/sprites, scrolling, VBlank/NMI and 256×240 framebuffer.
-- **P4 — input/APU/scheduler**: controller, CPU/PPU synchronization, audio and frame pacing.
-- **P5 — compatibility**: more mappers, unofficial opcodes when needed, save RAM/state and tougher timing suites.
+- **P0 — foundation ✅**: ROM loader, iNES parser, trace/watchpoint infrastructure, flat test bus and CI.
+- **P1 — 2A03/6502 CPU ✅**: all 151 official NMOS opcodes, addressing modes, stack/control flow, IRQ/NMI/BRK/RTI and instruction cycle accounting.
+- **P2 — NES CPU bus + Mapper 0 ✅**: real 2KiB RAM mirroring, PPU/APU device windows, Cartridge abstraction, NROM-128/NROM-256 PRG mapping, PRG-RAM, trainer preload and CHR-ROM/CHR-RAM.
+- **P3 — PPU**: PPU memory bus, nametable/palette/OAM, registers with real side effects, background/sprites, scrolling, VBlank/NMI and framebuffer.
+- **P4 — input/APU/scheduler**: controller, CPU/PPU synchronization, OAM DMA, audio and frame pacing.
+- **P5 — compatibility**: more mappers, selected unofficial opcodes, save RAM/state and tougher timing suites.
 
-## P1 CPU delivered
+## P2 architecture
 
-- Table-driven decode for all **151 official NMOS 6502 opcodes**; illegal opcodes fail loudly.
-- Immediate, zero page, ZP X/Y, absolute, ABS X/Y, accumulator, relative, indirect, `(zp,X)` and `(zp),Y` addressing.
-- Correct zero-page wrapping and original NMOS `JMP ($xxFF)` page-wrap behavior.
-- Binary ALU, shifts/rotates, compares, BIT, loads/stores, transfers, increments/decrements, branches and flag instructions.
-- PHA/PLA/PHP/PLP, JSR/RTS, BRK/RTI, IRQ and NMI.
-- Instruction-level cycle accounting including branch and read page-cross penalties.
-- NES behavior: D flag is writable, but ADC/SBC stay binary by default. `decimalArithmetic:true` exists only for generic NMOS oracle testing.
-- Trace records opcode bytes, pre/post state and per-instruction cycle delta.
+```text
+.nes / iNES
+    ↓
+Cartridge
+    ↓ Mapper 0 (NROM)
+NES CPU Bus ─── 2KiB RAM
+    │          PPU register device (stub in P2)
+    │          APU/IO device (stub in P2)
+    ↓
+2A03 / 6502 CPU
+```
 
-## Verification
+The browser now constructs a real `NESMachine`: parses the ROM, creates a cartridge, maps it into `NESBus`, resets the actual CPU through `$FFFC/$FFFD`, and exposes guarded Step/Run/Reset controls plus the CPU trace tail.
 
-`npm test` runs browser/Node-shared regression tests: exact 151-opcode set, base-cycle/page-cross metadata, one-step dispatch of every official opcode, directed addressing/stack/interrupt/ALU tests, plus exhaustive binary ADC and SBC over every `A × operand × carry` combination.
+P2 deliberately does **not** fake a working PPU. A commercial NROM may execute for a while and then wait forever on PPU status; P3 replaces the stub with the real device.
 
-CI additionally downloads a commit-pinned Klaus Dormann `6502_functional_test.bin` and runs that independent suite. The upstream GPLv3 binary is not vendored here.
+## Tests
 
-## Current boundary
+```bash
+npm test
+```
 
-P1 is instruction-accurate with total instruction cycle counts; it is **not yet a per-clock bus transaction model**. Dummy reads/writes and sub-instruction IRQ polling nuances are deferred until the NES bus/PPU timing layers need them. Unofficial opcodes are intentionally unsupported for now.
+This runs both the P1 CPU suite and P2 bus/cartridge suite. P2 includes a synthetic NROM integration test whose reset vector starts the real CPU at `$8000`; its program executes `LDA/STA` through the cartridge/bus stack and must write `$42` into NES internal RAM.
 
-A `.nes` file can be parsed in the web UI; gameplay begins in P2/P3 when cartridge bus and PPU are connected.
+CI uses the exact same `npm test` command and additionally runs the commit-pinned Klaus Dormann NMOS 6502 functional oracle.
+
+## Current precision boundary
+
+CPU execution is instruction-accurate with total cycle counts, not yet a per-clock bus-transaction model. PPU/APU semantics, OAM DMA stalls and sub-instruction interrupt timing are future stages. Unofficial opcodes remain intentionally unsupported.

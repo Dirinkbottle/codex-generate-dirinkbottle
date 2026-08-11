@@ -1,6 +1,8 @@
 {
-  "name": "nes-lab-stage1",
+  "name": "nes-lab",
   "private": true,
   "type": "module",
-  "scripts": { "test": "node tests/selftest.mjs" }
+  "scripts": {
+    "test": "node tests/selftest.mjs && node tests/p2test.mjs"
+  }
 }

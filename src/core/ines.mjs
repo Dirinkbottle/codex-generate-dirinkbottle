@@ -9,8 +9,7 @@ export function parseINES(input) {
   const chrBanks = bytes[5];
   const flags6 = bytes[6];
   const flags7 = bytes[7];
-  const isNES2 = (flags7 & 0x0c) === 0x08;
-  if (isNES2) throw new Error('NES 2.0 is not supported in stage 1');
+  if ((flags7 & 0x0c) === 0x08) throw new Error('NES 2.0 is not supported yet');
 
   const hasTrainer = !!(flags6 & 0x04);
   const trainerSize = hasTrainer ? 512 : 0;
@@ -22,15 +21,15 @@ export function parseINES(input) {
 
   const mapper = (flags6 >> 4) | (flags7 & 0xf0);
   const mirroring = (flags6 & 0x08) ? 'four-screen' : (flags6 & 0x01) ? 'vertical' : 'horizontal';
+  const trainer = hasTrainer ? bytes.slice(16, 16 + 512) : new Uint8Array(0);
 
   return {
-    format: 'iNES',
-    mapper,
-    mirroring,
-    hasBattery: !!(flags6 & 0x02),
-    hasTrainer,
-    prgBanks,
-    chrBanks,
+    format: 'iNES', mapper, mirroring,
+    hasBattery: !!(flags6 & 0x02), hasTrainer,
+    prgBanks, chrBanks,
+    // iNES 1.0 uses 0 here to mean one 8KiB PRG-RAM bank for compatibility.
+    prgRamBanks: bytes[8] || 1,
+    trainer,
     prgRom: bytes.slice(dataOffset, dataOffset + prgSize),
     chrRom: bytes.slice(dataOffset + prgSize, dataOffset + prgSize + chrSize),
     raw: bytes,
