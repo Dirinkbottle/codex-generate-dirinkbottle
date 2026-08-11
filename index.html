@@ -1,22 +1,17 @@
 <!doctype html>
 <html lang="zh-CN">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Codex Generated Hello World</title>
-  <style>
-    html,body{height:100%;margin:0;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#0d1117;color:#e6edf3}
-    body{display:grid;place-items:center}
-    main{text-align:center;padding:2rem}
-    h1{font-size:clamp(2.5rem,8vw,6rem);margin:0 0 1rem}
-    p{font-size:1.2rem;color:#8b949e}
-    code{color:#79c0ff}
-  </style>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NES Lab — Stage 1</title>
+<style>
+:root{color-scheme:dark;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}*{box-sizing:border-box}body{margin:0;background:#0b0f14;color:#d8dee9}header{padding:28px 24px;border-bottom:1px solid #27313d;background:#111821}main{max-width:1050px;margin:auto;padding:24px;display:grid;grid-template-columns:1.15fr .85fr;gap:18px}.card{background:#111821;border:1px solid #27313d;border-radius:14px;padding:18px}h1{margin:0 0 8px;font-size:clamp(28px,5vw,48px)}h2{margin-top:0}.muted{color:#8795a6}.badge{display:inline-block;padding:4px 8px;border:1px solid #405167;border-radius:999px;font-size:12px}.upload{display:block;border:1px dashed #50647d;border-radius:12px;padding:24px;text-align:center;cursor:pointer}.upload input{display:block;margin:12px auto 0}.ok{color:#8bd49c}.bad{color:#ff7b72}.okbox,.badbox{padding:12px;border-radius:10px;margin:14px 0}.okbox{background:#10281a}.badbox{background:#32161a}pre{white-space:pre-wrap;overflow:auto;background:#090d12;padding:12px;border-radius:10px;min-height:120px}li{margin:8px 0}@media(max-width:780px){main{grid-template-columns:1fr}}
+</style>
 </head>
 <body>
-  <main>
-    <h1>Hello World 👋</h1>
-    <p>This page was written to <code>Dirinkbottle/codex-generate-dirinkbottle</code> by ChatGPT.</p>
-  </main>
-</body>
-</html>
+<header><span class="badge">NES Emulator / P0 foundation</span><h1>红白机模拟器实验场</h1><div class="muted">这一版先把调试、测试、ROM 入口和 6502 垂直切片钉牢。</div></header>
+<main>
+<section class="card"><h2>ROM Loader</h2><label class="upload">选择一个 .nes ROM<input id="rom" type="file" accept=".nes,application/octet-stream"></label><div id="status" class="muted" style="margin-top:14px">等待 ROM。</div><pre id="meta">Stage 1: iNES parser ready.</pre></section>
+<section class="card"><h2>Self-test</h2><div id="test-summary" class="muted">running…</div><ul id="tests"></ul><p class="muted">这些测试和 Node CI 共用同一套代码；后续每个 opcode / mapper / PPU timing 都往这里加。</p></section>
+</main>
+<script type="module" src="./src/app.mjs"></script>
+</body></html>
