@@ -31,7 +31,7 @@ export class NESMachine {
     this.apu=new APU2A03({traceHub:this.traceHub,cycle:()=>this.scheduler?.cpuCycle??0,onIRQChange:line=>this.setIRQSource('apu',line)});
     this.bus=new NESBus({cartridge:this.cartridge,ppu:this.ppu,apu:this.apu,controllers:this.controllers,watchpoints:this.watchpoints,traceHub:this.traceHub});
     this.traceHub.clear();
-    this.cpu=new CPU2A03(this.bus,{trace:this.trace});
+    this.cpu=new CPU2A03(this.bus,{trace:this.trace,externalIrqSampling:true});
     this.cpu.reset();this.syncIRQSources();
     this.scheduler=new MasterClock({cpu:this.cpu,ppu:this.ppu,apu:this.apu,bus:this.bus,controllers:this.controllers,inputTimeline:this.inputTimeline,traceHub:this.traceHub,startCpuCycle:0});
     this.traceHub.setClock(()=>this.scheduler?.cpuCycle??0);

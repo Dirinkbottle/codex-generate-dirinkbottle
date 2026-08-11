@@ -55,10 +55,11 @@ export const OPCODES = makeOpcodeTable();
 export const LEGAL_OPCODE_COUNT = OPCODES.filter(Boolean).length;
 
 export class CPU6502 {
-  constructor(bus, { trace = new TraceRing(4096), decimalArithmetic = false } = {}) {
+  constructor(bus, { trace = new TraceRing(4096), decimalArithmetic = false, externalIrqSampling = false } = {}) {
     this.bus = bus;
     this.trace = trace;
     this.decimalArithmetic = !!decimalArithmetic;
+    this.externalIrqSampling = !!externalIrqSampling;
     this.resetState();
   }
 
@@ -69,7 +70,9 @@ export class CPU6502 {
     this.pc = 0;
     this.cycles = 0;
     this.irqLine = false;
+    this.irqSampled = false;
     this.nmiPending = false;
+    this.lastStepWasInterrupt = false;
     this._instructionBytes = null;
   }
 
@@ -81,6 +84,7 @@ export class CPU6502 {
 
   requestNMI() { this.nmiPending = true; }
   setIRQ(level = true) { this.irqLine = !!level; }
+  sampleIRQ(masked = this.getFlag(FLAG.I)) { this.irqSampled = !!this.irqLine && !masked; return this.irqSampled; }
   irq(level = true) { this.setIRQ(level); }
   nmi() { this.requestNMI(); }
 
@@ -302,8 +306,10 @@ export class CPU6502 {
   }
 
   step() {
-    if (this.nmiPending) { this.nmiPending = false; return this.serviceInterrupt(0xfffa, 'NMI'); }
-    if (this.irqLine && !this.getFlag(FLAG.I)) return this.serviceInterrupt(0xfffe, 'IRQ');
+    this.lastStepWasInterrupt = false;
+    if (this.nmiPending) { this.nmiPending = false; this.lastStepWasInterrupt = true; return this.serviceInterrupt(0xfffa, 'NMI'); }
+    const takeIRQ = this.externalIrqSampling ? this.irqSampled : (this.irqLine && !this.getFlag(FLAG.I));
+    if (takeIRQ) { if (this.externalIrqSampling) this.irqSampled = false; this.lastStepWasInterrupt = true; return this.serviceInterrupt(0xfffe, 'IRQ'); }
 
     const startPC = this.pc;
     const before = this.trace ? this.snapshot() : null;
@@ -326,6 +332,6 @@ export class CPU6502 {
   }
 
   snapshot() {
-    return { a: this.a, x: this.x, y: this.y, sp: this.sp, p: this.p, pc: this.pc, cycles: this.cycles, irqLine: this.irqLine, nmiPending: this.nmiPending };
+    return { a: this.a, x: this.x, y: this.y, sp: this.sp, p: this.p, pc: this.pc, cycles: this.cycles, irqLine: this.irqLine, irqSampled: this.irqSampled, nmiPending: this.nmiPending };
   }
 }

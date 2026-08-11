@@ -50,8 +50,10 @@ export class CPU2A03 extends CPU6502 {
     return 0;
   }
   step(){
-    if(this.nmiPending){this.nmiPending=false;return this.serviceInterrupt(0xfffa,'NMI');}
-    if(this.irqLine&&!this.getFlag(FLAG.I))return this.serviceInterrupt(0xfffe,'IRQ');
+    this.lastStepWasInterrupt=false;
+    if(this.nmiPending){this.nmiPending=false;this.lastStepWasInterrupt=true;return this.serviceInterrupt(0xfffa,'NMI');}
+    const takeIRQ=this.externalIrqSampling?this.irqSampled:(this.irqLine&&!this.getFlag(FLAG.I));
+    if(takeIRQ){if(this.externalIrqSampling)this.irqSampled=false;this.lastStepWasInterrupt=true;return this.serviceInterrupt(0xfffe,'IRQ');}
     const startPC=this.pc,before=this.trace?this.snapshot():null,opcode=this.bus.read8(this.pc,'opcode');this.pc=(this.pc+1)&0xffff;
     const op=OPCODES[opcode]??UNOFFICIAL_OPCODES[opcode];
     if(!op)throw new Error(`Unsupported/unstable opcode $${hex8(opcode)} at $${hex16(startPC)}`);
