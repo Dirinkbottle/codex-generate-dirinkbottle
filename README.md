@@ -55,7 +55,7 @@ PPU fetch / $2006 commit / $2007 access
 
 `PPUMemoryBus` keeps two concepts separate: `ppuMem` is a broad emulator memory trace, while the mapper observer sees only addresses that are meaningful on the mapper-facing PPU bus. In particular, framebuffer palette lookup is an internal emulator/PPU operation and must not generate fake MMC3 A12 edges.
 
-The PPU sprite-fetch model was also moved toward the real fetch phase: sprite pattern reads for the next scanline are prepared at dot 257, with dummy pattern fetches for unused sprite slots. That gives both common pattern-table arrangements a real A12 low/high window instead of calling `mapper.scanline()` once per line.
+The PPU sprite-fetch model was also moved toward the real fetch phase: sprite evaluation metadata is prepared at dot 257, while the eight sprite fetch slots are distributed across dots 257–320 (garbage nametable reads followed by pattern low/high), including dummy pattern fetches for unused slots. That gives both common pattern-table arrangements a real A12 low/high window instead of calling `mapper.scanline()` once per line.
 
 ## ROM testing model: no commercial ROM knowledge required
 
@@ -112,8 +112,8 @@ The local command is the same regression command used by CI. Current focused cou
 - P3: 31
 - P4: 26
 - P5: 22
-- P5.5: 17
-- **Total: 136 local deterministic tests**
+- P5.5: 21
+- **Total: 140 local deterministic tests**
 
 CI additionally retains the commit-pinned Klaus Dormann NMOS 6502 functional oracle and runs pinned external blargg MMC3 IRQ ROMs.
 
@@ -121,4 +121,4 @@ CI additionally retains the commit-pinned Klaus Dormann NMOS 6502 functional ora
 
 This is common MMC3 Rev B/C-oriented functional behavior, not a claim of transistor-perfect MMC3 revision emulation. Pathological revision-specific reload behavior is intentionally outside this stage.
 
-The CPU core is still instruction-granular internally. PPU rendering is dot-scheduled, but sprite evaluation/fetch is still a functional model rather than every individual 2C02 secondary-OAM bus micro-operation. Exact DMC/OAM conflicts, unstable high-byte unofficial opcodes, interrupt polling races and some MMC3 revision/sub-cycle edge cases remain reasons to eventually move the CPU and device bus to a micro-cycle executor.
+The CPU core is still instruction-granular internally. PPU rendering is dot-scheduled and sprite pattern bus fetches are distributed across dots 257–320, but secondary-OAM evaluation is still a functional model rather than every individual 2C02 OAM micro-operation. Exact DMC/OAM conflicts, unstable high-byte unofficial opcodes, interrupt polling races and some MMC3 revision/sub-cycle edge cases remain reasons to eventually move the CPU and device bus to a micro-cycle executor.

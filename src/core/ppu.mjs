@@ -101,20 +101,43 @@ export class PPU2C02 {
     }
   }
   evaluateSprites(scanline){
-    this.scanlineSprites=[];const h=(this.ctrl&0x20)?16:8;let found=0;
+    const sprites=[],h=(this.ctrl&0x20)?16:8;let found=0;
     for(let i=0;i<64;i++){
       const base=i*4,y=this.oam[base],row=scanline-(y+1);
-      if(row<0||row>=h)continue;found++;if(this.scanlineSprites.length>=8)continue;
+      if(row<0||row>=h)continue;found++;if(sprites.length>=8)continue;
       const tile=this.oam[base+1],attr=this.oam[base+2],x=this.oam[base+3];let r=(attr&0x80)?h-1-row:row,addr;
       if(h===16){const table=tile&1;let tileIndex=tile&0xfe;if(r>=8){tileIndex++;r-=8;}addr=(table<<12)+(tileIndex<<4)+r;}
       else addr=((this.ctrl&0x08)?0x1000:0)+(tile<<4)+r;
-      const lo=this.bus.read8(addr,'sprite-pattern-lo'),hi=this.bus.read8(addr+8,'sprite-pattern-hi');
-      this.scanlineSprites.push({index:i,x,attr,lo,hi});
+      sprites.push({index:i,x,attr,lo:0,hi:0,patternAddr:addr});
     }
-    const dummyBase=(this.ctrl&0x08)?0x1000:0;
-    for(let i=this.scanlineSprites.length;i<8;i++){this.bus.read8(dummyBase,'sprite-pattern-dummy-lo');this.bus.read8(dummyBase+8,'sprite-pattern-dummy-hi');}
     if(found>8)this.status|=0x20;
-    this.traceHub?.emit('ppuEvent',{type:'sprite-eval',frame:this.frame,scanline,dot:this.dot,found,selected:this.scanlineSprites.length});
+    this.scanlineSprites=sprites;
+    this.traceHub?.emit('ppuEvent',{type:'sprite-eval',frame:this.frame,scanline,dot:this.dot,found,selected:sprites.length});
+    return sprites;
+  }
+  spriteDummyPatternAddress(){
+    // Empty secondary-OAM entries read as $FF. In 8x16 mode bit 0 selects $1000.
+    return (this.ctrl&0x20)?0x1ff0:((this.ctrl&0x08)?0x1000:0);
+  }
+  spriteFetch(){
+    if(this.dot<257||this.dot>320)return;
+    const rel=this.dot-257,slot=rel>>3,phase=rel&7,s=this.scanlineSprites[slot]??null;
+    if(phase===0||phase===2){
+      // Two garbage nametable reads per sprite slot. They are important to MMC3 because they pull A12 low.
+      this.bus.read8(0x2000|(this.v&0x0fff),`sprite-garbage-${slot}-${phase}`);
+      return;
+    }
+    if(phase===4){
+      const addr=s?.patternAddr??this.spriteDummyPatternAddress();
+      const value=this.bus.read8(addr,s?'sprite-pattern-lo':'sprite-pattern-dummy-lo');
+      if(s)s.lo=value;
+      return;
+    }
+    if(phase===6){
+      const addr=(s?.patternAddr??this.spriteDummyPatternAddress())+8;
+      const value=this.bus.read8(addr,s?'sprite-pattern-hi':'sprite-pattern-dummy-hi');
+      if(s)s.hi=value;
+    }
   }
   backgroundPixel(x){
     if(!this.backgroundEnabled()|| (x<8 && !(this.mask&0x02)))return {pixel:0,palette:0};
@@ -153,7 +176,8 @@ export class PPU2C02 {
       if((this.dot>=2&&this.dot<=257)||(this.dot>=322&&this.dot<=337))this.shiftBackground();
       if((this.dot>=1&&this.dot<=256)||(this.dot>=321&&this.dot<=336))this.backgroundFetch();
       if(this.dot===256)this.incrementY();
-      if(this.dot===257){this.loadBackgroundShifters();this.copyX();const next=this.scanline===261?0:this.scanline+1;this.evaluateSprites(next);}
+      if(this.dot===257){this.loadBackgroundShifters();this.copyX();const next=this.scanline===261?0:this.scanline+1;this.scanlineSprites=this.evaluateSprites(next);}
+      if(this.dot>=257&&this.dot<=320)this.spriteFetch();
       if(this.scanline===261&&this.dot>=280&&this.dot<=304)this.copyY();
       if(this.dot===338||this.dot===340)this.bgNextTileId=this.bus.read8(0x2000|(this.v&0x0fff),'bg-nt-prefetch');
     }
