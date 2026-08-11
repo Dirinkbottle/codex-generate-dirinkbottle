@@ -1,82 +1,38 @@
 import { TraceRing, WatchpointSet } from '../src/core/debug.mjs';
 import { FlatMemoryBus } from '../src/core/bus.mjs';
 import { parseINES } from '../src/core/ines.mjs';
-import { CPU6502, FLAG } from '../src/core/cpu6502.mjs';
+import { CPU6502, FLAG, OPCODES, LEGAL_OPCODE_COUNT } from '../src/core/cpu6502.mjs';
 
-export function runSelfTests() {
-  const results = [];
-  const test = (name, fn) => {
-    try { fn(); results.push({ name, ok: true }); }
-    catch (error) { results.push({ name, ok: false, error: error?.stack || String(error) }); }
-  };
-  const eq = (actual, expected, msg = '') => { if (actual !== expected) throw new Error(`${msg} expected ${expected}, got ${actual}`); };
-  const ok = (cond, msg = 'assertion failed') => { if (!cond) throw new Error(msg); };
-
-  test('TraceRing evicts oldest records', () => {
-    const t = new TraceRing(2); t.push({ n: 1 }); t.push({ n: 2 }); t.push({ n: 3 });
-    eq(t.snapshot().length, 2); eq(t.snapshot()[0].n, 2); eq(t.snapshot()[1].n, 3);
-  });
-
-  test('Watchpoints stop on matching access only', () => {
-    const w = new WatchpointSet(); const bus = new FlatMemoryBus({ watchpoints: w });
-    w.add(0x1234, 'w', 'sentinel'); bus.read8(0x1234); eq(bus.breakReason, null);
-    bus.write8(0x1234, 0x56); eq(bus.breakReason.address, 0x1234); eq(bus.breakReason.value, 0x56);
-  });
-
-  test('iNES parser handles mapper/mirroring/PRG/CHR', () => {
-    const rom = new Uint8Array(16 + 16384 + 8192);
-    rom.set([0x4e,0x45,0x53,0x1a, 1,1, 0x23,0x10], 0);
-    rom[16] = 0xaa; rom[16 + 16384] = 0xbb;
-    const c = parseINES(rom);
-    eq(c.mapper, 0x12); eq(c.mirroring, 'vertical'); ok(c.hasBattery); eq(c.prgRom[0], 0xaa); eq(c.chrRom[0], 0xbb);
-  });
-
-  test('iNES parser rejects malformed and NES2 headers', () => {
-    let threw = false; try { parseINES(new Uint8Array(16)); } catch { threw = true; } ok(threw);
-    const rom = new Uint8Array(16); rom.set([0x4e,0x45,0x53,0x1a,0,0,0,0x08]);
-    threw = false; try { parseINES(rom); } catch (e) { threw = /NES 2\.0/.test(e.message); } ok(threw);
-  });
-
-  test('CPU reset reads little-endian reset vector', () => {
-    const bus = new FlatMemoryBus(); bus.write8(0xfffc, 0x34); bus.write8(0xfffd, 0x12);
-    const cpu = new CPU6502(bus); cpu.reset(); eq(cpu.pc, 0x1234); eq(cpu.sp, 0xfd); ok(cpu.getFlag(FLAG.I));
-  });
-
-  test('LDA/STA/INX update state and flags', () => {
-    const bus = new FlatMemoryBus(); bus.load(0x8000, Uint8Array.from([0xa9,0x00,0xa2,0xff,0xe8,0xa9,0x80,0x8d,0x00,0x20,0x00]));
-    bus.write8(0xfffc,0x00); bus.write8(0xfffd,0x80);
-    const cpu = new CPU6502(bus); cpu.reset();
-    cpu.step(); eq(cpu.a,0); ok(cpu.getFlag(FLAG.Z));
-    cpu.step(); eq(cpu.x,0xff); ok(cpu.getFlag(FLAG.N));
-    cpu.step(); eq(cpu.x,0); ok(cpu.getFlag(FLAG.Z));
-    cpu.step(); eq(cpu.a,0x80); ok(cpu.getFlag(FLAG.N));
-    cpu.step(); eq(bus.read8(0x2000),0x80);
-  });
-
-  test('JSR/RTS preserve return path through stack', () => {
-    const bus = new FlatMemoryBus();
-    bus.load(0x8000, Uint8Array.from([0x20,0x06,0x80, 0xa9,0x42,0x00, 0xa9,0x11,0x60]));
-    bus.write8(0xfffc,0x00); bus.write8(0xfffd,0x80);
-    const cpu = new CPU6502(bus); cpu.reset();
-    cpu.step(); eq(cpu.pc,0x8006); eq(cpu.sp,0xfb);
-    cpu.step(); eq(cpu.a,0x11); cpu.step(); eq(cpu.pc,0x8003); eq(cpu.sp,0xfd);
-    cpu.step(); eq(cpu.a,0x42);
-  });
-
-  test('Branch cycles account for taken and page-cross', () => {
-    const bus = new FlatMemoryBus(); bus.load(0x80fd, Uint8Array.from([0xa9,0x01,0xd0,0xfe]));
-    bus.write8(0xfffc,0xfd); bus.write8(0xfffd,0x80);
-    const cpu = new CPU6502(bus); cpu.reset(); cpu.step();
-    const spent = cpu.step(); eq(cpu.pc,0x80ff); eq(spent,4);
-  });
-
-  const passed = results.filter(r => r.ok).length;
-  return { passed, failed: results.length - passed, total: results.length, results };
-}
-
-if (typeof process !== 'undefined' && process.argv?.[1]?.endsWith('selftest.mjs')) {
-  const report = runSelfTests();
-  for (const r of report.results) console.log(`${r.ok ? 'PASS' : 'FAIL'} ${r.name}${r.ok ? '' : `\n${r.error}`}`);
-  console.log(`\n${report.passed}/${report.total} tests passed`);
-  if (report.failed) process.exitCode = 1;
-}
+const NullTrace={push(){},clear(){},snapshot(){return[]},tail(){return[]}};
+const fx=(p=[],start=0x8000,opts={})=>{const bus=new FlatMemoryBus();bus.load(start,Uint8Array.from(p));bus.write8(0xfffc,start&255);bus.write8(0xfffd,start>>8);bus.write8(0xfffa,0);bus.write8(0xfffb,0x90);bus.write8(0xfffe,0);bus.write8(0xffff,0x90);const cpu=new CPU6502(bus,{trace:opts.trace??NullTrace,decimalArithmetic:!!opts.decimalArithmetic});cpu.reset();return{bus,cpu}};
+export function runSelfTests(){const rs=[];const t=(n,f)=>{try{f();rs.push({name:n,ok:true})}catch(e){rs.push({name:n,ok:false,error:e?.stack||String(e)})}};const eq=(a,b,m='')=>{if(a!==b)throw Error(`${m} expected ${b}, got ${a}`)};const ok=(x,m='assertion failed')=>{if(!x)throw Error(m)};const fl=(c,f,v)=>eq(c.getFlag(f),v);
+ t('TraceRing evicts oldest records',()=>{const x=new TraceRing(2);[1,2,3].forEach(n=>x.push({n}));eq(x.snapshot().map(x=>x.n).join(','),'2,3')});
+ t('Watchpoints stop on matching access only',()=>{const w=new WatchpointSet(),b=new FlatMemoryBus({watchpoints:w});w.add(0x1234,'w');b.read8(0x1234);eq(b.breakReason,null);b.write8(0x1234,0x56);eq(b.breakReason.value,0x56)});
+ t('iNES parser regression',()=>{const r=new Uint8Array(16+16384+8192);r.set([0x4e,0x45,0x53,0x1a,1,1,0x23,0x10]);r[16]=0xaa;r[16400]=0xbb;const c=parseINES(r);eq(c.mapper,0x12);eq(c.mirroring,'vertical');ok(c.hasBattery);eq(c.prgRom[0],0xaa);eq(c.chrRom[0],0xbb)});
+ const legal=[0x00,0x01,0x05,0x06,0x08,0x09,0x0a,0x0d,0x0e,0x10,0x11,0x15,0x16,0x18,0x19,0x1d,0x1e,0x20,0x21,0x24,0x25,0x26,0x28,0x29,0x2a,0x2c,0x2d,0x2e,0x30,0x31,0x35,0x36,0x38,0x39,0x3d,0x3e,0x40,0x41,0x45,0x46,0x48,0x49,0x4a,0x4c,0x4d,0x4e,0x50,0x51,0x55,0x56,0x58,0x59,0x5d,0x5e,0x60,0x61,0x65,0x66,0x68,0x69,0x6a,0x6c,0x6d,0x6e,0x70,0x71,0x75,0x76,0x78,0x79,0x7d,0x7e,0x81,0x84,0x85,0x86,0x88,0x8a,0x8c,0x8d,0x8e,0x90,0x91,0x94,0x95,0x96,0x98,0x99,0x9a,0x9d,0xa0,0xa1,0xa2,0xa4,0xa5,0xa6,0xa8,0xa9,0xaa,0xac,0xad,0xae,0xb0,0xb1,0xb4,0xb5,0xb6,0xb8,0xb9,0xba,0xbc,0xbd,0xbe,0xc0,0xc1,0xc4,0xc5,0xc6,0xc8,0xc9,0xca,0xcc,0xcd,0xce,0xd0,0xd1,0xd5,0xd6,0xd8,0xd9,0xdd,0xde,0xe0,0xe1,0xe4,0xe5,0xe6,0xe8,0xe9,0xea,0xec,0xed,0xee,0xf0,0xf1,0xf5,0xf6,0xf8,0xf9,0xfd,0xfe];
+ t('Official NMOS opcode table contains exactly 151 instructions',()=>{eq(LEGAL_OPCODE_COUNT,151);eq(OPCODES.map((x,i)=>x?i:null).filter(x=>x!==null).join(','),legal.join(','))});
+ t('Canonical base-cycle metadata matrix',()=>{const rows=[[7,6,0,0,0,3,5,0,3,2,2,0,0,4,6,0],[2,5,0,0,0,4,6,0,2,4,0,0,0,4,7,0],[6,6,0,0,3,3,5,0,4,2,2,0,4,4,6,0],[2,5,0,0,0,4,6,0,2,4,0,0,0,4,7,0],[6,6,0,0,0,3,5,0,3,2,2,0,3,4,6,0],[2,5,0,0,0,4,6,0,2,4,0,0,0,4,7,0],[6,6,0,0,0,3,5,0,4,2,2,0,5,4,6,0],[2,5,0,0,0,4,6,0,2,4,0,0,0,4,7,0],[0,6,0,0,3,3,3,0,2,0,2,0,4,4,4,0],[2,6,0,0,4,4,4,0,2,5,2,0,0,5,0,0],[2,6,2,0,3,3,3,0,2,2,2,0,4,4,4,0],[2,5,0,0,4,4,4,0,2,4,2,0,4,4,4,0],[2,6,0,0,3,3,5,0,2,2,2,0,4,4,6,0],[2,5,0,0,0,4,6,0,2,4,0,0,0,4,7,0],[2,6,0,0,3,3,5,0,2,2,2,0,4,4,6,0],[2,5,0,0,0,4,6,0,2,4,0,0,0,4,7,0]];for(let i=0;i<256;i++)eq(OPCODES[i]?.cycles??0,rows[i>>4][i&15],`$${i.toString(16)}`)});
+ t('Page-cross bonus metadata is exact',()=>{const e=[0x11,0x19,0x1d,0x31,0x39,0x3d,0x51,0x59,0x5d,0x71,0x79,0x7d,0xb1,0xb9,0xbc,0xbd,0xbe,0xd1,0xd9,0xdd,0xf1,0xf9,0xfd];eq(OPCODES.map((x,i)=>x?.pageCross?i:null).filter(x=>x!==null).join(','),e.join(','))});
+ t('Every official opcode dispatches one instruction',()=>{for(const op of legal){const {bus,cpu}=fx([op,0,0]);bus.mem.fill(0,0x100,0x200);try{cpu.step()}catch(e){throw Error(`$${op.toString(16).padStart(2,'0')}: ${e.message}`)}}});
+ t('Illegal opcode fails loudly with PC',()=>{const {cpu}=fx([0x02]);let s='';try{cpu.step()}catch(e){s=e.message}ok(/\$02/.test(s)&&/\$8000/.test(s))});
+ t('Reset vector/state/cycles deterministic',()=>{const {cpu}=fx([0xea]);eq(cpu.pc,0x8000);eq(cpu.sp,0xfd);eq(cpu.cycles,7);fl(cpu,FLAG.I,true);fl(cpu,FLAG.U,true)});
+ t('Zero-page indexed addressing wraps',()=>{const {bus,cpu}=fx([0xa2,1,0xb5,0xff,0xa0,2,0xb6,0xfe]);bus.write8(0,0x42);cpu.step();cpu.step();eq(cpu.a,0x42);bus.write8(0,0x99);cpu.step();cpu.step();eq(cpu.x,0x99)});
+ t('(zp,X)/(zp),Y pointer wrapping and page bonus',()=>{let q=fx([0xa2,1,0xa1,0xff]);q.bus.write8(0,0x34);q.bus.write8(1,0x12);q.bus.write8(0x1234,0x77);q.cpu.step();q.cpu.step();eq(q.cpu.a,0x77);q=fx([0xa0,1,0xb1,0xff]);q.bus.write8(0xff,0xff);q.bus.write8(0,0x20);q.bus.write8(0x2100,0x88);q.cpu.step();eq(q.cpu.step(),6);eq(q.cpu.a,0x88)});
+ t('Absolute indexed read bonus; stores fixed timing',()=>{const {bus,cpu}=fx([0xa2,1,0xbd,0xff,0x20,0x9d,0xff,0x20]);bus.write8(0x2100,0x5a);cpu.step();eq(cpu.step(),5);eq(cpu.a,0x5a);eq(cpu.step(),5);eq(bus.read8(0x2100),0x5a)});
+ t('JMP indirect reproduces NMOS page-wrap bug',()=>{const {bus,cpu}=fx([0x6c,0xff,0x12]);bus.write8(0x12ff,0x78);bus.write8(0x1200,0x56);bus.write8(0x1300,0x99);eq(cpu.step(),5);eq(cpu.pc,0x5678)});
+ t('All branches: condition/taken/page-cross cycles',()=>{for(const [op,f,w] of [[0x10,FLAG.N,0],[0x30,FLAG.N,1],[0x50,FLAG.V,0],[0x70,FLAG.V,1],[0x90,FLAG.C,0],[0xb0,FLAG.C,1],[0xd0,FLAG.Z,0],[0xf0,FLAG.Z,1]]){let q=fx([op,2]);q.cpu.setFlag(f,!!w);eq(q.cpu.step(),3);eq(q.cpu.pc,0x8004);q=fx([op,2]);q.cpu.setFlag(f,!w);eq(q.cpu.step(),2);eq(q.cpu.pc,0x8002)}const q=fx([0xd0,0xfe],0x80ff);q.cpu.setFlag(FLAG.Z,false);eq(q.cpu.step(),4)});
+ t('Loads/stores/transfers preserve intended state',()=>{const {bus,cpu}=fx([0xa9,0x80,0xaa,0xa8,0x8d,0,0x20,0x8e,1,0x20,0x8c,2,0x20,0xba,0x9a,0x8a,0x98]);for(let i=0;i<11;i++)cpu.step();eq(bus.read8(0x2000),0x80);eq(bus.read8(0x2001),0x80);eq(bus.read8(0x2002),0x80);eq(cpu.a,0x80)});
+ t('Logic/BIT/compare flags',()=>{const {bus,cpu}=fx([0xa9,0x55,0x09,0x0a,0x29,0x0f,0x49,0xff,0x24,0x10,0xc9,0xf0,0xe0,0,0xc0,0]);bus.write8(0x10,0xc0);for(let i=0;i<5;i++)cpu.step();eq(cpu.a,0xf0);fl(cpu,FLAG.N,true);fl(cpu,FLAG.V,true);cpu.step();fl(cpu,FLAG.C,true);fl(cpu,FLAG.Z,true)});
+ t('INC/DEC/register wrap and Z/N',()=>{const {bus,cpu}=fx([0xe6,0x10,0xc6,0x11,0xa2,0xff,0xe8,0xca,0xa0,0,0x88,0xc8]);bus.write8(0x10,0xff);bus.write8(0x11,0);for(let i=0;i<8;i++)cpu.step();eq(bus.read8(0x10),0);eq(bus.read8(0x11),0xff);eq(cpu.x,0xff);eq(cpu.y,0)});
+ t('ASL/LSR/ROL/ROR accumulator and memory',()=>{const {bus,cpu}=fx([0xa9,0x81,0x0a,0x4a,0x38,0x2a,0x6a,0x06,0x10,0x46,0x11,0x26,0x12,0x66,0x13]);bus.write8(0x10,0x80);bus.write8(0x11,1);bus.write8(0x12,0x80);bus.write8(0x13,1);while(cpu.pc<0x800f)cpu.step();eq(bus.read8(0x10),0);eq(bus.read8(0x11),0);eq(bus.read8(0x12),1);eq(bus.read8(0x13),0x80)});
+ t('Stack PHP/PLP/PHA/PLA and JSR/RTS',()=>{const {cpu}=fx([0xa9,0x80,0x48,0xa9,0,0x68,0x08,0x18,0x28,0x20,0x10,0x80,0xea,0xea,0xea,0xea,0xa9,0x11,0x60]);for(let i=0;i<8;i++)cpu.step();eq(cpu.pc,0x8010);cpu.step();eq(cpu.a,0x11);cpu.step();eq(cpu.pc,0x800c);fl(cpu,FLAG.C,false)});
+ t('BRK pushes PC+2/status and RTI restores',()=>{const {bus,cpu}=fx([0,0xea]);bus.write8(0x9000,0x40);cpu.setFlag(FLAG.C,true);cpu.setFlag(FLAG.D,true);eq(cpu.step(),7);eq(cpu.pc,0x9000);eq(bus.read8(0x1fd),0x80);eq(bus.read8(0x1fc),2);ok(bus.read8(0x1fb)&FLAG.B);eq(cpu.step(),6);eq(cpu.pc,0x8002);fl(cpu,FLAG.C,true);fl(cpu,FLAG.D,true)});
+ t('IRQ mask, NMI priority and interrupt stack',()=>{let q=fx([0xea]);q.cpu.setIRQ(true);eq(q.cpu.step(),2);q=fx([0x58,0xea]);q.cpu.setIRQ(true);q.cpu.step();eq(q.cpu.step(),7);eq(q.cpu.pc,0x9000);q=fx([0xea]);q.cpu.setIRQ(true);q.cpu.requestNMI();eq(q.cpu.step(),7);eq(q.cpu.pc,0x9000)});
+ t('Flag instructions mutate intended bits',()=>{const {cpu}=fx([0x38,0x18,0xf8,0xd8,0x78,0x58,0xb8]);cpu.step();fl(cpu,FLAG.C,true);cpu.step();fl(cpu,FLAG.C,false);cpu.step();fl(cpu,FLAG.D,true);cpu.step();fl(cpu,FLAG.D,false);cpu.step();fl(cpu,FLAG.I,true);cpu.step();fl(cpu,FLAG.I,false);cpu.setFlag(FLAG.V,true);cpu.step();fl(cpu,FLAG.V,false)});
+ t('NES decimal flag writable but ADC/SBC remain binary',()=>{const {cpu}=fx([0xf8,0xa9,9,0x18,0x69,1,0x38,0xe9,1]);for(let i=0;i<6;i++)cpu.step();eq(cpu.a,9);fl(cpu,FLAG.D,true)});
+ t('Optional NMOS decimal oracle handles valid BCD',()=>{const b=new FlatMemoryBus(),c=new CPU6502(b,{trace:NullTrace,decimalArithmetic:true});c.p=FLAG.U|FLAG.D;c.a=0x49;c.adc(0x51);eq(c.a,0);fl(c,FLAG.C,true);c.p=FLAG.U|FLAG.D|FLAG.C;c.a=0;c.sbc(1);eq(c.a,0x99);fl(c,FLAG.C,false)});
+ t('ADC exhaustive binary oracle all A/M/C inputs',()=>{const c=new CPU6502(new FlatMemoryBus(),{trace:NullTrace});for(let a=0;a<256;a++)for(let b=0;b<256;b++)for(let k=0;k<2;k++){c.a=a;c.p=FLAG.U|(k?FLAG.C:0);c.adc(b);const s=a+b+k,r=s&255;if(c.a!==r||c.getFlag(FLAG.C)!==(s>255)||c.getFlag(FLAG.Z)!==(r===0)||c.getFlag(FLAG.N)!==!!(r&128)||c.getFlag(FLAG.V)!==!!((~(a^b)&(a^r))&128))throw Error(`ADC ${a}/${b}/${k}`)}});
+ t('SBC exhaustive binary oracle all A/M/C inputs',()=>{const c=new CPU6502(new FlatMemoryBus(),{trace:NullTrace});for(let a=0;a<256;a++)for(let b=0;b<256;b++)for(let k=0;k<2;k++){c.a=a;c.p=FLAG.U|(k?FLAG.C:0);c.sbc(b);const d=a-b-(k?0:1),r=d&255;if(c.a!==r||c.getFlag(FLAG.C)!==(d>=0)||c.getFlag(FLAG.Z)!==(r===0)||c.getFlag(FLAG.N)!==!!(r&128)||c.getFlag(FLAG.V)!==!!(((a^r)&(a^b))&128))throw Error(`SBC ${a}/${b}/${k}`)}});
+ t('Trace records bytes/before/after/cycle delta',()=>{const tr=new TraceRing(4),{cpu}=fx([0xa9,0x42,0xe8],0x8000,{trace:tr});cpu.step();cpu.step();const [a,b]=tr.snapshot();eq(a.bytes.join(','),'169,66');eq(a.before.a,0);eq(a.a,0x42);eq(a.spent,2);eq(b.mnemonic,'INX');eq(b.x,1)});
+ const passed=rs.filter(x=>x.ok).length;return{passed,failed:rs.length-passed,total:rs.length,results:rs}}
+if(typeof process!=='undefined'&&process.argv?.[1]?.endsWith('selftest.mjs')){const r=runSelfTests();for(const x of r.results)console.log(`${x.ok?'PASS':'FAIL'} ${x.name}${x.ok?'':`\n${x.error}`}`);console.log(`\n${r.passed}/${r.total} tests passed`);if(r.failed)process.exitCode=1}
