@@ -71,15 +71,22 @@ PRG-RAM enable + write protect
 IRQ latch / reload / decrement / enable / acknowledge
 short A12 pulse rejection
 $2006 address commits clocking A12
+$2007 post-increment clocking A12
 palette-internal accesses not clocking A12
 BG=$0000 / Sprite=$1000 fetch layout
 BG=$1000 / Sprite=$0000 fetch layout
+241 qualified A12 clocks per rendered frame
+sprite pattern A12 edge timing at dot 261
 APU IRQ OR Mapper IRQ
+instruction-end maskable IRQ sampling
+CPU MMIO writes landing on the final instruction bus cycle
 Mapper4 A12 edge -> real CPU IRQ vector
 save-state restoration of mapper/A12/IRQ state
 ```
 
 CI also downloads pinned blargg MMC3 IRQ test ROMs from `christopherpow/nes-test-roms`. The runner does not inspect pixels: the test source exposes its final result in CPU RAM `$00F8`, where `1` means pass. The ROM bytes are pinned by upstream commit and verified with their Git blob SHA before execution.
+
+The pinned external MMC3 suite currently passes all four automated targets: `1.Clocking`, `2.Details`, `3.A12_clocking`, and `4.Scanline_timing`.
 
 ## Unofficial CPU opcodes
 
@@ -112,8 +119,8 @@ The local command is the same regression command used by CI. Current focused cou
 - P3: 31
 - P4: 26
 - P5: 22
-- P5.5: 21
-- **Total: 140 local deterministic tests**
+- P5.5: 22
+- **Total: 141 local deterministic tests**
 
 CI additionally retains the commit-pinned Klaus Dormann NMOS 6502 functional oracle and runs pinned external blargg MMC3 IRQ ROMs.
 
@@ -121,4 +128,6 @@ CI additionally retains the commit-pinned Klaus Dormann NMOS 6502 functional ora
 
 This is common MMC3 Rev B/C-oriented functional behavior, not a claim of transistor-perfect MMC3 revision emulation. Pathological revision-specific reload behavior is intentionally outside this stage.
 
-The CPU core is still instruction-granular internally. PPU rendering is dot-scheduled and sprite pattern bus fetches are distributed across dots 257–320, but secondary-OAM evaluation is still a functional model rather than every individual 2C02 OAM micro-operation. Exact DMC/OAM conflicts, unstable high-byte unofficial opcodes, interrupt polling races and some MMC3 revision/sub-cycle edge cases remain reasons to eventually move the CPU and device bus to a micro-cycle executor.
+The CPU core is still instruction-granular internally, but the NES scheduler now predicts the instruction length before execution, advances the independent devices through the earlier CPU cycles, and places common device-visible CPU reads/writes at the final instruction bus-cycle boundary. Maskable IRQ is kept separate as a physical line and an instruction-end sampled request. This is enough for the pinned blargg MMC3 scanline-timing oracle without pretending that the CPU is already a true micro-cycle executor.
+
+PPU rendering is dot-scheduled and sprite pattern bus fetches are distributed across dots 257–320, but secondary-OAM evaluation is still a functional model rather than every individual 2C02 OAM micro-operation. Exact dummy-read/RMW bus phases, DMC/OAM conflicts with individual CPU accesses, unstable high-byte unofficial opcodes, and revision-specific/sub-cycle races remain reasons to eventually move the CPU and device bus to a full micro-cycle executor.
