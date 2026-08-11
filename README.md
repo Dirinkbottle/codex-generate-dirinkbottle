@@ -1,33 +1,46 @@
 # NES Lab
 
-Browser-first NES emulator built around deterministic tests and observable state before adding rendering/audio complexity.
+Browser-first NES emulator built around deterministic tests and observable state before adding more console complexity.
 
 ## Roadmap
 
 - **P0 — foundation ✅**: ROM loader, iNES parser, trace/watchpoint infrastructure, flat test bus and CI.
 - **P1 — 2A03/6502 CPU ✅**: all 151 official NMOS opcodes, addressing modes, stack/control flow, IRQ/NMI/BRK/RTI and instruction cycle accounting.
-- **P2 — NES CPU bus + Mapper 0 ✅**: real 2KiB RAM mirroring, PPU/APU device windows, Cartridge abstraction, NROM-128/NROM-256 PRG mapping, PRG-RAM, trainer preload and CHR-ROM/CHR-RAM.
-- **P3 — PPU**: PPU memory bus, nametable/palette/OAM, registers with real side effects, background/sprites, scrolling, VBlank/NMI and framebuffer.
-- **P4 — input/APU/scheduler**: controller, CPU/PPU synchronization, OAM DMA, audio and frame pacing.
-- **P5 — compatibility**: more mappers, selected unofficial opcodes, save RAM/state and tougher timing suites.
+- **P2 — NES CPU bus + Mapper 0 ✅**: 2KiB RAM mirroring, CPU device windows, NROM-128/NROM-256, PRG-RAM, trainer preload and CHR-ROM/CHR-RAM.
+- **P3 — PPU ✅ (functional timing model)**: PPU memory bus, CIRAM/palette mirroring, `$2000-$2007` side effects, `v/t/x/w` scroll registers, `$2007` read buffer, 262×341 NTSC timing, odd-frame skip, VBlank/NMI, background fetch pipeline, framebuffer, basic sprite evaluation/priority/flip/overflow/sprite-0 hit.
+- **P4 — input/APU/scheduler**: controller ports, OAM DMA stalls, APU, realtime frame/audio pacing and tighter CPU/PPU scheduling.
+- **P5 — compatibility**: additional mappers, selected unofficial opcodes, save RAM/state and tougher timing ROMs.
 
-## P2 architecture
+## P3 architecture and observability
 
 ```text
-.nes / iNES
-    ↓
-Cartridge
-    ↓ Mapper 0 (NROM)
-NES CPU Bus ─── 2KiB RAM
-    │          PPU register device (stub in P2)
-    │          APU/IO device (stub in P2)
-    ↓
-2A03 / 6502 CPU
+CPU6502
+   │
+   ├──────── cpu instruction trace
+   │
+NES CPU Bus ─────────── cpuMem trace
+   │
+   ├── RAM
+   ├── APU/IO stub
+   ├── Cartridge / Mapper 0
+   └── PPU registers ── ppuReg trace
+                         │
+                      PPU2C02 ───── ppuEvent trace
+                         │
+                    PPU Memory Bus ─ ppuMem trace
+                      │     │     │
+                     CHR   CIRAM  Palette
+                         │
+                     framebuffer
 ```
 
-The browser now constructs a real `NESMachine`: parses the ROM, creates a cartridge, maps it into `NESBus`, resets the actual CPU through `$FFFC/$FFFD`, and exposes guarded Step/Run/Reset controls plus the CPU trace tail.
+The trace channels are deliberately separate. A black or corrupt frame can be reduced from CPU writes to PPU register state (`v/t/x/w`), then to the exact PPU memory transactions and finally to timing events such as VBlank, NMI edges and sprite evaluation.
 
-P2 deliberately does **not** fake a working PPU. A commercial NROM may execute for a while and then wait forever on PPU status; P3 replaces the stub with the real device.
+## Browser
+
+Load a Mapper 0/NROM `.nes` file. The page exposes a 256×240 framebuffer canvas, Step/Run/Run Frame/Reset controls, CPU/PPU state, and selectable CPU instruction, CPU memory, PPU register, PPU memory and PPU event trace tails.
+
+CPU instructions advance the PPU by three PPU clocks per CPU clock. A PPU NMI edge queues an NMI on the CPU core.
 
 ## Tests
 
@@ -35,10 +48,8 @@ P2 deliberately does **not** fake a working PPU. A commercial NROM may execute f
 npm test
 ```
 
-This runs both the P1 CPU suite and P2 bus/cartridge suite. P2 includes a synthetic NROM integration test whose reset vector starts the real CPU at `$8000`; its program executes `LDA/STA` through the cartridge/bus stack and must write `$42` into NES internal RAM.
+The command runs the same local suite used by CI: P1 CPU tests, P2 cartridge/bus tests, and 31 P3 device tests covering PPU memory mapping, palette aliases, register side effects, scroll state, memory/register tracing, VBlank/NMI timing, background fetch ordering, background pixels, sprites and frame length. CI additionally runs the commit-pinned Klaus Dormann NMOS 6502 functional oracle used in P1.
 
-CI uses the exact same `npm test` command and additionally runs the commit-pinned Klaus Dormann NMOS 6502 functional oracle.
+## P3 precision boundary
 
-## Current precision boundary
-
-CPU execution is instruction-accurate with total cycle counts, not yet a per-clock bus-transaction model. PPU/APU semantics, OAM DMA stalls and sub-instruction interrupt timing are future stages. Unofficial opcodes remain intentionally unsupported.
+This is a real stateful PPU model and advances at scanline/dot granularity, but it is not yet transistor/bus-cycle exact in every corner. Sprite evaluation is functionally modeled rather than reproducing the 2C02 sprite-overflow hardware bug, and CPU instructions are still atomic before their elapsed clocks are handed to the PPU. OAM DMA, controller I/O, APU behavior and finer CPU/PPU contention are P4 work.
