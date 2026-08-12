@@ -11,6 +11,7 @@ Browser-first NES emulator built around deterministic tests, observable device s
 - **P4 — controller + synchronization + APU ✅**: master CPU timeline, controllers, OAM/DMC DMA, pulse/triangle/noise/DMC audio and cross-device timing traces.
 - **P5 — compatibility ✅**: MMC1/UxROM/CNROM, stable unofficial opcodes, battery SRAM, save states and mapper trace.
 - **P5.5 — Mapper 4 / MMC3 ✅**: PRG/CHR banking, dynamic mirroring/WRAM control, mapper-visible PPU A12 filtering, IRQ counter/acknowledge, CPU IRQ-source aggregation and independent MMC3 IRQ ROM oracles.
+- **P6 — performance 🚧**: production Fast Play detaches trace infrastructure from CPU/PPU/APU/bus/mapper/scheduler hot paths; profiling/data-oriented rendering/audio optimizations follow.
 
 ## Supported cartridges
 
@@ -100,11 +101,13 @@ Battery-backed PRG-RAM exposes `exportBatteryRAM()` / `importBatteryRAM()`. The 
 
 `NESMachine.saveState()` / `loadState()` capture mutable CPU, buses, PPU/OAM/framebuffer/fetch state, APU/DMC state, controllers/input timeline, mapper registers/RAM/A12 IRQ state and master-clock counters. Save states reject a different ROM fingerprint.
 
-## Observability
+## Observability and Fast Play
 
-Normal mapper events live in the `mapper` channel with the same global `seq` / `cpuCycle` stamps as CPU/PPU/APU/DMA/controller traces. MMC3 adds a `mapperA12` raw channel containing A12 transitions, low duration, PPU-cycle timestamp and access source.
+The production/browser path constructs `NESMachine()` with tracing detached: `traceHub === null` and `cpu.trace === null`. CPU, PPU, APU, CPU/PPU buses, mapper and scheduler therefore receive no trace object at all, so optional trace calls short-circuit before record-object construction. The browser also skips trace-panel refresh while playing.
 
-`mapperA12` is **disabled by default** because raw PPU-bus transitions are high-volume. Selecting the raw A12 trace in the browser enables it on demand; normal bank/qualified-edge/IRQ events stay visible through `mapper` without turning tracing itself into a performance problem.
+Development and oracle paths opt in explicitly with `new NESMachine({developmentTracing:true})`. In that mode normal mapper events live in the `mapper` channel with the same global `seq` / `cpuCycle` stamps as CPU/PPU/APU/DMA/controller traces. MMC3 additionally exposes a high-volume `mapperA12` raw channel containing A12 transitions, low duration, PPU-cycle timestamp and access source; that raw channel remains disabled until explicitly enabled.
+
+This keeps observability available for failure analysis without leaving the instrumentation permanently in the realtime datapath.
 
 ## Tests
 
@@ -120,7 +123,8 @@ The local command is the same regression command used by CI. Current focused cou
 - P4: 26
 - P5: 22
 - P5.5: 22
-- **Total: 141 local deterministic tests**
+- P6 fast-path: 2
+- **Total: 143 local deterministic tests**
 
 CI additionally retains the commit-pinned Klaus Dormann NMOS 6502 functional oracle and runs pinned external blargg MMC3 IRQ ROMs.
 
