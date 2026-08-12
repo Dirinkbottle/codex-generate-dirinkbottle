@@ -4,7 +4,7 @@ import { NESMachine } from '../src/core/machine.mjs';
 const path=process.argv[2];
 if(!path)throw new Error('usage: node tests/blargg_mmc3.mjs <rom.nes>');
 const bytes=new Uint8Array(readFileSync(path));
-const m=new NESMachine({traceCapacities:{cpu:256,cpuMem:512,ppuReg:1024,mapper:2048,mapperA12:2048,timeline:1024}});
+const m=new NESMachine({developmentTracing:true,traceCapacities:{cpu:256,cpuMem:512,ppuReg:1024,mapper:2048,mapperA12:2048,timeline:1024}});
 m.loadROM(bytes);
 for(const ch of ['ppuMem','audioSample','apuReg','apuEvent','controller','dma'])m.traceHub.enable(ch,false);
 m.traceHub.enable('mapperA12',true);
