@@ -1,1 +1,1 @@
-{"name":"nes-lab","private":true,"type":"module","scripts":{"test":"node tests/selftest.mjs && node tests/p2test.mjs && node tests/p3test.mjs && node tests/p4test.mjs && node tests/p5test.mjs && node tests/p55test.mjs && node tests/p6test.mjs"}}
+{"name":"nes-lab","private":true,"type":"module","scripts":{"test":"node --check src/app.mjs && node tests/selftest.mjs && node tests/p2test.mjs && node tests/p3test.mjs && node tests/p4test.mjs && node tests/p5test.mjs && node tests/p55test.mjs && node tests/p6test.mjs && node tests/p6_ui_test.mjs"}}
