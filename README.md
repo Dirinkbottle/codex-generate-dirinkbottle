@@ -11,7 +11,7 @@ Browser-first NES emulator built around deterministic tests, observable device s
 - **P4 — controller + synchronization + APU ✅**: master CPU timeline, controllers, OAM/DMC DMA, pulse/triangle/noise/DMC audio and cross-device timing traces.
 - **P5 — compatibility ✅**: MMC1/UxROM/CNROM, stable unofficial opcodes, battery SRAM, save states and mapper trace.
 - **P5.5 — Mapper 4 / MMC3 ✅**: PRG/CHR banking, dynamic mirroring/WRAM control, mapper-visible PPU A12 filtering, IRQ counter/acknowledge, CPU IRQ-source aggregation and independent MMC3 IRQ ROM oracles.
-- **P6 — performance 🚧**: production Fast Play detaches trace infrastructure from CPU/PPU/APU/bus/mapper/scheduler hot paths; profiling/data-oriented rendering/audio optimizations follow.
+- **P6 — performance / player UX 🚧**: production Fast Play detaches trace infrastructure from realtime hot paths; the web app is now player-first with responsive portrait/landscape layouts and a real multi-touch NES controller. Profiling/data-oriented rendering/audio optimizations follow.
 
 ## Supported cartridges
 
@@ -105,9 +105,17 @@ Battery-backed PRG-RAM exposes `exportBatteryRAM()` / `importBatteryRAM()`. The 
 
 The production/browser path constructs `NESMachine()` with tracing detached: `traceHub === null` and `cpu.trace === null`. CPU, PPU, APU, CPU/PPU buses, mapper and scheduler therefore receive no trace object at all, so optional trace calls short-circuit before record-object construction. The browser also skips trace-panel refresh while playing.
 
-Development and oracle paths opt in explicitly with `new NESMachine({developmentTracing:true})`. In that mode normal mapper events live in the `mapper` channel with the same global `seq` / `cpuCycle` stamps as CPU/PPU/APU/DMA/controller traces. MMC3 additionally exposes a high-volume `mapperA12` raw channel containing A12 transitions, low duration, PPU-cycle timestamp and access source; that raw channel remains disabled until explicitly enabled.
+Development and oracle paths opt in explicitly with `new NESMachine({developmentTracing:true})`. The browser development path is available through `?debug=1`; the normal URL never creates TraceHub. In development mode normal mapper events live in the `mapper` channel with the same global `seq` / `cpuCycle` stamps as CPU/PPU/APU/DMA/controller traces. MMC3 additionally exposes a high-volume `mapperA12` raw channel containing A12 transitions, low duration, PPU-cycle timestamp and access source; that raw channel remains disabled until explicitly enabled.
 
 This keeps observability available for failure analysis without leaving the instrumentation permanently in the realtime datapath.
+
+## Player UI
+
+The normal page now defaults to a player surface rather than a debug dashboard. ROM loading, framebuffer, Play/Pause, Reset, Save/Load and the NES controller remain visible; runtime state, trace and advanced stepping live inside a collapsed `Developer / Debug` panel.
+
+The virtual controller uses Pointer Events and tracks active pointer IDs, so mobile input supports real combinations such as holding Right while pressing A. Portrait layouts keep the D-pad/actions/system keys below the screen, while a landscape media query moves the controls beside the framebuffer. Safe-area insets are respected on phones with display cutouts. Desktop keyboard input remains Z/X, Shift/Enter and arrow keys.
+
+Normal browser startup also no longer imports or runs the CPU self-test suite. Correctness regression remains in `npm test` and CI rather than delaying every player session.
 
 ## Tests
 
@@ -124,7 +132,10 @@ The local command is the same regression command used by CI. Current focused cou
 - P5: 22
 - P5.5: 22
 - P6 fast-path: 2
-- **Total: 143 local deterministic tests**
+- P6 player/UI: 6
+- **Total: 149 local deterministic/static regression tests**
+
+`npm test` also runs `node --check src/app.mjs` before the suites, so browser-app syntax failures are caught even though the UI module is not executed under Node.
 
 CI additionally retains the commit-pinned Klaus Dormann NMOS 6502 functional oracle and runs pinned external blargg MMC3 IRQ ROMs.
 
